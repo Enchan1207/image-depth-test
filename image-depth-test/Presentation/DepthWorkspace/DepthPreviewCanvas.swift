@@ -9,6 +9,7 @@ struct DepthPreviewCanvas: View {
     let mode: DepthPreviewMode
     let inputImage: NSImage?
     let depthImage: NSImage?
+    let cutoutImage: NSImage?
     let isLoading: Bool
     let selectedLayer: DepthLayerDefinition?
     let overlayOpacity: Double
@@ -30,9 +31,7 @@ struct DepthPreviewCanvas: View {
                 imageView(inputImage, placeholderSystemImage: "circle.lefthalf.filled", message: imageMessage)
                     .overlay(layerTint.opacity(depthImage == nil ? 0 : overlayOpacity))
             case .isolated:
-                imageView(depthImage ?? inputImage, placeholderSystemImage: "scope", message: depthMessage)
-                    .overlay(layerTint.opacity(depthImage == nil ? 0 : 0.78))
-                    .mask(RoundedRectangle(cornerRadius: 8))
+                imageView(cutoutImage, placeholderSystemImage: "scope", message: cutoutMessage)
             }
 
             if isLoading {
@@ -74,6 +73,10 @@ struct DepthPreviewCanvas: View {
 
     private var depthMessage: String {
         isLoading ? "深度推定中" : "推定結果なし"
+    }
+
+    private var cutoutMessage: String {
+        isLoading ? "切り抜き生成中" : "切り抜き結果なし"
     }
 
     @ViewBuilder

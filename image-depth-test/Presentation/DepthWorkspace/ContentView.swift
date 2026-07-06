@@ -126,7 +126,8 @@ struct ContentView: View {
                 mode: previewMode,
                 inputImage: viewModel.inputImage,
                 depthImage: viewModel.depthImage,
-                isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth,
+                cutoutImage: viewModel.selectedLayerCutoutImage,
+                isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerCutout,
                 selectedLayer: layerDefinitions[safe: selectedLayerIndex],
                 overlayOpacity: overlayOpacity
             )
@@ -181,6 +182,14 @@ struct ContentView: View {
                     }
                 }
 
+                Button {
+                    generateSelectedLayerCutout()
+                } label: {
+                    Label("選択中レイヤを切り抜く", systemImage: "scissors")
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(!viewModel.canGenerateLayerCutout || viewModel.isGeneratingLayerCutout)
+
                 ForEach(layerDefinitions) { layer in
                     LayerRangeRow(
                         layer: layer,
@@ -225,6 +234,21 @@ struct ContentView: View {
     private func resetDepthRanges() {
         depthBoundaries = [0.22, 0.48, 0.74]
         selectedLayerIndex = min(3, layerCount - 1)
+    }
+
+    private func generateSelectedLayerCutout() {
+        guard let selectedLayer = layerDefinitions[safe: selectedLayerIndex],
+              let range = try? DepthRange(
+                lowerBound: selectedLayer.lowerBound,
+                upperBound: selectedLayer.upperBound
+              ) else {
+            return
+        }
+
+        Task {
+            await viewModel.generateLayerCutout(for: range)
+            previewMode = .isolated
+        }
     }
 }
 

@@ -11,16 +11,24 @@ import Observation
 @Observable
 final class ImageDepthViewModel {
     @ObservationIgnored private let depthEstimator: any DepthEstimating
+    @ObservationIgnored private var inputCGImage: CGImage?
+    @ObservationIgnored private var depthCGImage: CGImage?
 
     private(set) var selectedFileName: String?
     private(set) var inputImage: NSImage?
     private(set) var depthImage: NSImage?
+    private(set) var selectedLayerCutoutImage: NSImage?
     private(set) var isLoadingImage = false
     private(set) var isEstimatingDepth = false
+    private(set) var isGeneratingLayerCutout = false
     private(set) var errorMessage: String?
 
     var hasSelectedImage: Bool {
         inputImage != nil
+    }
+
+    var canGenerateLayerCutout: Bool {
+        inputCGImage != nil && depthCGImage != nil
     }
 
     init(depthEstimator: any DepthEstimating) {
@@ -32,13 +40,17 @@ final class ImageDepthViewModel {
 
         selectedFileName = url.lastPathComponent
         inputImage = nil
+        inputCGImage = nil
         depthImage = nil
+        depthCGImage = nil
+        selectedLayerCutoutImage = nil
         errorMessage = nil
         isLoadingImage = true
 
         do {
             let image = try await Self.loadPlatformImage(from: url)
             inputImage = image
+            inputCGImage = image.cgImageForInference()
         } catch {
             selectedFileName = nil
             errorMessage = "画像を読み込めませんでした"
@@ -59,12 +71,16 @@ final class ImageDepthViewModel {
             return
         }
 
+        inputCGImage = cgImage
         depthImage = nil
+        depthCGImage = nil
+        selectedLayerCutoutImage = nil
         errorMessage = nil
         isEstimatingDepth = true
 
         do {
             let depthCGImage = try await depthEstimator.estimateDepth(for: cgImage)
+            self.depthCGImage = depthCGImage
             depthImage = NSImage(
                 cgImage: depthCGImage,
                 size: NSSize(width: depthCGImage.width, height: depthCGImage.height)
@@ -76,13 +92,46 @@ final class ImageDepthViewModel {
         isEstimatingDepth = false
     }
 
+    func generateLayerCutout(for range: DepthRange) async {
+        guard let inputCGImage, let depthCGImage else {
+            selectedLayerCutoutImage = nil
+            return
+        }
+
+        isGeneratingLayerCutout = true
+
+        do {
+            let cutoutCGImage = try await Task.detached(priority: .userInitiated) {
+                try DepthLayerMasking.makeCutout(
+                    from: inputCGImage,
+                    depthImage: depthCGImage,
+                    range: range
+                )
+            }.value
+
+            selectedLayerCutoutImage = NSImage(
+                cgImage: cutoutCGImage,
+                size: NSSize(width: cutoutCGImage.width, height: cutoutCGImage.height)
+            )
+        } catch {
+            selectedLayerCutoutImage = nil
+            errorMessage = "レイヤ切り抜きに失敗しました"
+        }
+
+        isGeneratingLayerCutout = false
+    }
+
     func clearSelection() {
         selectedFileName = nil
         inputImage = nil
+        inputCGImage = nil
         depthImage = nil
+        depthCGImage = nil
+        selectedLayerCutoutImage = nil
         errorMessage = nil
         isLoadingImage = false
         isEstimatingDepth = false
+        isGeneratingLayerCutout = false
     }
 
     private static func loadPlatformImage(from url: URL) async throws -> NSImage {
