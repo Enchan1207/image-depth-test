@@ -16,6 +16,8 @@ struct ContentView: View {
     @State private var selectedLayerIndex = 3
     @State private var depthBoundaries = [0.22, 0.48, 0.74]
     @State private var overlayOpacity = 0.56
+    @State private var visibleLayerIndices: Set<Int> = [0, 1, 2, 3]
+    @State private var layerRenderingTask: Task<Void, Never>?
 
     init(depthEstimator: any DepthEstimating) {
         _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
@@ -41,6 +43,7 @@ struct ContentView: View {
             case .success(let urls):
                 Task {
                     await viewModel.loadImage(from: urls.first)
+                    await generateLayerRenderings()
                 }
             case .failure:
                 viewModel.clearSelection()
@@ -48,6 +51,15 @@ struct ContentView: View {
         }
         .onChange(of: layerCount) { _, newValue in
             selectedLayerIndex = min(selectedLayerIndex, newValue - 1)
+            ensureBoundaryStorageForLayerCount(newValue)
+            syncVisibleLayers(for: newValue)
+            scheduleLayerRenderingUpdate()
+        }
+        .onChange(of: depthBoundaries) { _, _ in
+            scheduleLayerRenderingUpdate()
+        }
+        .onChange(of: overlayOpacity) { _, _ in
+            scheduleLayerRenderingUpdate()
         }
     }
 
@@ -67,6 +79,7 @@ struct ContentView: View {
             Button {
                 Task {
                     await viewModel.estimateDepthForSelectedImage()
+                    await generateLayerRenderings()
                 }
             } label: {
                 Label("再推定", systemImage: "arrow.triangle.2.circlepath")
@@ -80,10 +93,10 @@ struct ContentView: View {
 
     @ViewBuilder
     private var statusView: some View {
-        if viewModel.isLoadingImage || viewModel.isEstimatingDepth {
+        if viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings {
             ProgressView()
                 .controlSize(.small)
-            Text(viewModel.isLoadingImage ? "読み込み中" : "深度推定中")
+            Text(statusText)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         } else if let errorMessage = viewModel.errorMessage {
@@ -101,6 +114,13 @@ struct ContentView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var statusText: String {
+        if viewModel.isLoadingImage { return "読み込み中" }
+        if viewModel.isEstimatingDepth { return "深度推定中" }
+        if viewModel.isGeneratingLayerRenderings { return "レイヤ生成中" }
+        return "処理中"
     }
 
     private var previewWorkspace: some View {
@@ -126,10 +146,11 @@ struct ContentView: View {
                 mode: previewMode,
                 inputImage: viewModel.inputImage,
                 depthImage: viewModel.depthImage,
-                cutoutImage: viewModel.selectedLayerCutoutImage,
-                isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerCutout,
-                selectedLayer: layerDefinitions[safe: selectedLayerIndex],
-                overlayOpacity: overlayOpacity
+                layerPreviewImage: viewModel.layerPreviewImage,
+                layerOverlayImage: viewModel.layerOverlayImage,
+                cutoutImages: visibleLayerCutoutImages,
+                isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings,
+                selectedLayer: layerDefinitions[safe: selectedLayerIndex]
             )
 
             DepthRangeEditor(
@@ -175,27 +196,37 @@ struct ContentView: View {
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                     Button("Auto") {
-                        autoSplitDepthRanges()
+                        Task {
+                            await autoSplitDepthRanges()
+                        }
                     }
+                    .disabled(!viewModel.canGenerateLayerRenderings)
+
                     Button("Reset") {
                         resetDepthRanges()
                     }
                 }
 
                 Button {
-                    generateSelectedLayerCutout()
+                    Task {
+                        await generateLayerRenderings()
+                        previewMode = .isolated
+                    }
                 } label: {
-                    Label("選択中レイヤを切り抜く", systemImage: "scissors")
+                    Label("切り抜きレイヤを表示", systemImage: "scope")
                 }
                 .frame(maxWidth: .infinity)
-                .disabled(!viewModel.canGenerateLayerCutout || viewModel.isGeneratingLayerCutout)
+                .disabled(!viewModel.canGenerateLayerRenderings || viewModel.isGeneratingLayerRenderings)
 
                 ForEach(layerDefinitions) { layer in
                     LayerRangeRow(
                         layer: layer,
-                        isSelected: layer.index == selectedLayerIndex
+                        isSelected: layer.index == selectedLayerIndex,
+                        isVisible: visibleLayerIndices.contains(layer.index)
                     ) {
                         selectedLayerIndex = layer.index
+                    } visibilityAction: {
+                        toggleLayerVisibility(layer.index)
                     }
                 }
             }
@@ -218,37 +249,113 @@ struct ContentView: View {
                 name: DepthLayerDefinition.names[index],
                 lowerBound: lowerBound,
                 upperBound: upperBound,
-                color: DepthLayerDefinition.colors[index]
+                renderColor: DepthLayerDefinition.renderColors[index]
             )
         }
     }
 
-    private func autoSplitDepthRanges() {
-        if layerCount == 3 {
-            depthBoundaries = [0.33, 0.66, 0.74]
-        } else {
-            depthBoundaries = [0.25, 0.50, 0.75]
+    private var layerRenderSpecs: [DepthLayerRenderSpec] {
+        layerDefinitions.compactMap(\.renderSpec)
+    }
+
+    private var visibleLayerCutoutImages: [NSImage] {
+        viewModel.layerCutoutImages.enumerated().compactMap { index, image in
+            visibleLayerIndices.contains(index) ? image : nil
         }
+    }
+
+    private func autoSplitDepthRanges() async {
+        guard let suggestedBoundaries = await viewModel.suggestDepthBoundaries(layerCount: layerCount) else {
+            resetDepthRanges()
+            return
+        }
+
+        setActiveBoundaries(suggestedBoundaries)
+        await generateLayerRenderings()
     }
 
     private func resetDepthRanges() {
         depthBoundaries = [0.22, 0.48, 0.74]
         selectedLayerIndex = min(3, layerCount - 1)
+        scheduleLayerRenderingUpdate()
     }
 
-    private func generateSelectedLayerCutout() {
-        guard let selectedLayer = layerDefinitions[safe: selectedLayerIndex],
-              let range = try? DepthRange(
-                lowerBound: selectedLayer.lowerBound,
-                upperBound: selectedLayer.upperBound
-              ) else {
-            return
+    private func scheduleLayerRenderingUpdate() {
+        layerRenderingTask?.cancel()
+        layerRenderingTask = Task {
+            try? await Task.sleep(for: .milliseconds(220))
+            guard !Task.isCancelled else { return }
+            await generateLayerRenderings()
+        }
+    }
+
+    private func generateLayerRenderings() async {
+        let specs = layerRenderSpecs
+        guard specs.count == layerCount else { return }
+
+        await viewModel.generateLayerRenderings(
+            layers: specs,
+            overlayOpacity: overlayOpacity
+        )
+    }
+
+    private func setActiveBoundaries(_ activeBoundaries: [Double]) {
+        var nextBoundaries = depthBoundaries
+        let sanitizedBoundaries = sanitized(activeBoundaries, expectedCount: layerCount - 1)
+
+        for index in sanitizedBoundaries.indices {
+            if index < nextBoundaries.count {
+                nextBoundaries[index] = sanitizedBoundaries[index]
+            } else {
+                nextBoundaries.append(sanitizedBoundaries[index])
+            }
         }
 
-        Task {
-            await viewModel.generateLayerCutout(for: range)
-            previewMode = .isolated
+        depthBoundaries = nextBoundaries
+    }
+
+    private func ensureBoundaryStorageForLayerCount(_ newLayerCount: Int) {
+        guard newLayerCount == 4, depthBoundaries.count < 3 else { return }
+
+        while depthBoundaries.count < 3 {
+            depthBoundaries.append(0.75)
         }
+    }
+
+    private func syncVisibleLayers(for newLayerCount: Int) {
+        visibleLayerIndices = visibleLayerIndices.filter { $0 < newLayerCount }
+
+        if visibleLayerIndices.isEmpty {
+            visibleLayerIndices.insert(min(selectedLayerIndex, newLayerCount - 1))
+        }
+    }
+
+    private func toggleLayerVisibility(_ index: Int) {
+        if visibleLayerIndices.contains(index) {
+            visibleLayerIndices.remove(index)
+        } else {
+            visibleLayerIndices.insert(index)
+        }
+
+        previewMode = .isolated
+    }
+
+    private func sanitized(_ boundaries: [Double], expectedCount: Int) -> [Double] {
+        let minimumGap = 0.04
+        var sanitizedBoundaries = Array(boundaries.prefix(expectedCount)).sorted()
+
+        while sanitizedBoundaries.count < expectedCount {
+            let fallbackValue = Double(sanitizedBoundaries.count + 1) / Double(expectedCount + 1)
+            sanitizedBoundaries.append(fallbackValue)
+        }
+
+        for index in sanitizedBoundaries.indices {
+            let lowerLimit = index == 0 ? minimumGap : sanitizedBoundaries[index - 1] + minimumGap
+            let upperLimit = 1 - minimumGap * Double(expectedCount - index)
+            sanitizedBoundaries[index] = min(max(sanitizedBoundaries[index], lowerLimit), upperLimit)
+        }
+
+        return sanitizedBoundaries
     }
 }
 

@@ -9,10 +9,11 @@ struct DepthPreviewCanvas: View {
     let mode: DepthPreviewMode
     let inputImage: NSImage?
     let depthImage: NSImage?
-    let cutoutImage: NSImage?
+    let layerPreviewImage: NSImage?
+    let layerOverlayImage: NSImage?
+    let cutoutImages: [NSImage]
     let isLoading: Bool
     let selectedLayer: DepthLayerDefinition?
-    let overlayOpacity: Double
 
     var body: some View {
         ZStack {
@@ -25,13 +26,11 @@ struct DepthPreviewCanvas: View {
             case .depth:
                 imageView(depthImage, placeholderSystemImage: "square.stack.3d.down.right", message: depthMessage)
             case .layers:
-                imageView(depthImage ?? inputImage, placeholderSystemImage: "square.3.layers.3d", message: depthMessage)
-                    .overlay(layerTint.opacity(depthImage == nil ? 0 : 0.62))
+                imageView(layerPreviewImage, placeholderSystemImage: "square.3.layers.3d", message: layerMessage)
             case .overlay:
-                imageView(inputImage, placeholderSystemImage: "circle.lefthalf.filled", message: imageMessage)
-                    .overlay(layerTint.opacity(depthImage == nil ? 0 : overlayOpacity))
+                imageView(layerOverlayImage, placeholderSystemImage: "circle.lefthalf.filled", message: layerMessage)
             case .isolated:
-                imageView(cutoutImage, placeholderSystemImage: "scope", message: cutoutMessage)
+                cutoutStack
             }
 
             if isLoading {
@@ -58,13 +57,20 @@ struct DepthPreviewCanvas: View {
         }
     }
 
-    private var layerTint: some View {
-        LinearGradient(
-            colors: DepthLayerDefinition.colors,
-            startPoint: .top,
-            endPoint: .bottom
-        )
-        .blendMode(.multiply)
+    @ViewBuilder
+    private var cutoutStack: some View {
+        if cutoutImages.isEmpty {
+            placeholder(systemImageName: "eye.slash", message: cutoutMessage)
+        } else {
+            ZStack {
+                ForEach(Array(cutoutImages.enumerated()), id: \.offset) { _, image in
+                    Image(platformImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(14)
+                }
+            }
+        }
     }
 
     private var imageMessage: String {
@@ -75,8 +81,12 @@ struct DepthPreviewCanvas: View {
         isLoading ? "深度推定中" : "推定結果なし"
     }
 
+    private var layerMessage: String {
+        isLoading ? "レイヤ生成中" : "レイヤ結果なし"
+    }
+
     private var cutoutMessage: String {
-        isLoading ? "切り抜き生成中" : "切り抜き結果なし"
+        isLoading ? "切り抜き生成中" : "表示中の切り抜きレイヤなし"
     }
 
     @ViewBuilder
@@ -87,16 +97,20 @@ struct DepthPreviewCanvas: View {
                 .scaledToFit()
                 .padding(14)
         } else {
-            VStack(spacing: 12) {
-                Image(systemName: placeholderSystemImage)
-                    .font(.system(size: 44, weight: .regular))
-                    .foregroundStyle(.secondary)
-
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(20)
+            placeholder(systemImageName: placeholderSystemImage, message: message)
         }
+    }
+
+    private func placeholder(systemImageName: String, message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImageName)
+                .font(.system(size: 44, weight: .regular))
+                .foregroundStyle(.secondary)
+
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
     }
 }

@@ -17,17 +17,19 @@ final class ImageDepthViewModel {
     private(set) var selectedFileName: String?
     private(set) var inputImage: NSImage?
     private(set) var depthImage: NSImage?
-    private(set) var selectedLayerCutoutImage: NSImage?
+    private(set) var layerPreviewImage: NSImage?
+    private(set) var layerOverlayImage: NSImage?
+    private(set) var layerCutoutImages: [NSImage] = []
     private(set) var isLoadingImage = false
     private(set) var isEstimatingDepth = false
-    private(set) var isGeneratingLayerCutout = false
+    private(set) var isGeneratingLayerRenderings = false
     private(set) var errorMessage: String?
 
     var hasSelectedImage: Bool {
         inputImage != nil
     }
 
-    var canGenerateLayerCutout: Bool {
+    var canGenerateLayerRenderings: Bool {
         inputCGImage != nil && depthCGImage != nil
     }
 
@@ -39,11 +41,7 @@ final class ImageDepthViewModel {
         guard let url else { return }
 
         selectedFileName = url.lastPathComponent
-        inputImage = nil
-        inputCGImage = nil
-        depthImage = nil
-        depthCGImage = nil
-        selectedLayerCutoutImage = nil
+        clearImages()
         errorMessage = nil
         isLoadingImage = true
 
@@ -72,19 +70,14 @@ final class ImageDepthViewModel {
         }
 
         inputCGImage = cgImage
-        depthImage = nil
-        depthCGImage = nil
-        selectedLayerCutoutImage = nil
+        clearDepthOutputs()
         errorMessage = nil
         isEstimatingDepth = true
 
         do {
             let depthCGImage = try await depthEstimator.estimateDepth(for: cgImage)
             self.depthCGImage = depthCGImage
-            depthImage = NSImage(
-                cgImage: depthCGImage,
-                size: NSSize(width: depthCGImage.width, height: depthCGImage.height)
-            )
+            depthImage = Self.makePlatformImage(from: depthCGImage)
         } catch {
             errorMessage = "深度推定に失敗しました"
         }
@@ -92,46 +85,77 @@ final class ImageDepthViewModel {
         isEstimatingDepth = false
     }
 
-    func generateLayerCutout(for range: DepthRange) async {
+    func generateLayerRenderings(layers: [DepthLayerRenderSpec], overlayOpacity: Double) async {
         guard let inputCGImage, let depthCGImage else {
-            selectedLayerCutoutImage = nil
+            clearLayerRenderings()
             return
         }
 
-        isGeneratingLayerCutout = true
+        isGeneratingLayerRenderings = true
 
         do {
-            let cutoutCGImage = try await Task.detached(priority: .userInitiated) {
-                try DepthLayerMasking.makeCutout(
+            let result = try await Task.detached(priority: .userInitiated) {
+                try DepthLayerMasking.makeLayerRenderings(
                     from: inputCGImage,
                     depthImage: depthCGImage,
-                    range: range
+                    layers: layers,
+                    overlayOpacity: overlayOpacity
                 )
             }.value
 
-            selectedLayerCutoutImage = NSImage(
-                cgImage: cutoutCGImage,
-                size: NSSize(width: cutoutCGImage.width, height: cutoutCGImage.height)
-            )
+            layerPreviewImage = Self.makePlatformImage(from: result.layerPreview)
+            layerOverlayImage = Self.makePlatformImage(from: result.overlayPreview)
+            layerCutoutImages = result.cutouts.map(Self.makePlatformImage)
+            errorMessage = nil
         } catch {
-            selectedLayerCutoutImage = nil
-            errorMessage = "レイヤ切り抜きに失敗しました"
+            clearLayerRenderings()
+            errorMessage = "レイヤ画像の生成に失敗しました"
         }
 
-        isGeneratingLayerCutout = false
+        isGeneratingLayerRenderings = false
+    }
+
+    func suggestDepthBoundaries(layerCount: Int) async -> [Double]? {
+        guard let depthCGImage else { return nil }
+
+        do {
+            return try await Task.detached(priority: .userInitiated) {
+                try DepthLayerMasking.suggestBoundaries(
+                    from: depthCGImage,
+                    layerCount: layerCount
+                )
+            }.value
+        } catch {
+            errorMessage = "深度レンジの自動分割に失敗しました"
+            return nil
+        }
     }
 
     func clearSelection() {
         selectedFileName = nil
-        inputImage = nil
-        inputCGImage = nil
-        depthImage = nil
-        depthCGImage = nil
-        selectedLayerCutoutImage = nil
+        clearImages()
         errorMessage = nil
         isLoadingImage = false
         isEstimatingDepth = false
-        isGeneratingLayerCutout = false
+        isGeneratingLayerRenderings = false
+    }
+
+    private func clearImages() {
+        inputImage = nil
+        inputCGImage = nil
+        clearDepthOutputs()
+    }
+
+    private func clearDepthOutputs() {
+        depthImage = nil
+        depthCGImage = nil
+        clearLayerRenderings()
+    }
+
+    private func clearLayerRenderings() {
+        layerPreviewImage = nil
+        layerOverlayImage = nil
+        layerCutoutImages = []
     }
 
     private static func loadPlatformImage(from url: URL) async throws -> NSImage {
@@ -150,6 +174,13 @@ final class ImageDepthViewModel {
 
             return image
         }.value
+    }
+
+    private static func makePlatformImage(from cgImage: CGImage) -> NSImage {
+        NSImage(
+            cgImage: cgImage,
+            size: NSSize(width: cgImage.width, height: cgImage.height)
+        )
     }
 }
 
