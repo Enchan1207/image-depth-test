@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var viewModel: ImageDepthViewModel
     @State private var isFileImporterPresented = false
 
-    init(depthEstimator: any DepthEstimating = ContentView.makeDepthEstimator()) {
+    init(depthEstimator: any DepthEstimating) {
         _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
     }
 
@@ -162,25 +162,15 @@ private extension Image {
     }
 }
 
-private extension ContentView {
-    static func makeDepthEstimator() -> any DepthEstimating {
-        do {
-            return try DepthAnythingV2DepthEstimator()
-        } catch {
-            return UnavailableDepthEstimator()
-        }
-    }
-}
-
-private struct UnavailableDepthEstimator: DepthEstimating {
+private struct PreviewDepthEstimator: DepthEstimating {
     func estimateDepth(for image: CGImage) async throws -> CGImage {
-        throw DepthEstimatorUnavailableError()
+        throw PreviewDepthEstimationError()
     }
 }
 
-private struct DepthEstimatorUnavailableError: Error {}
+private struct PreviewDepthEstimationError: Error {}
 
 #Preview {
-    ContentView()
+    ContentView(depthEstimator: PreviewDepthEstimator())
 }
 
