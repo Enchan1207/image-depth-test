@@ -9,8 +9,12 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @State private var viewModel = ImageDepthViewModel()
+    @State private var viewModel: ImageDepthViewModel
     @State private var isFileImporterPresented = false
+
+    init(depthEstimator: any DepthEstimating = ContentView.makeDepthEstimator()) {
+        _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
+    }
 
     var body: some View {
         VStack(spacing: 16) {
@@ -45,10 +49,10 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                if viewModel.isLoadingImage {
+                if viewModel.isLoadingImage || viewModel.isEstimatingDepth {
                     ProgressView()
                         .controlSize(.small)
-                    Text("読み込み中")
+                    Text(viewModel.isLoadingImage ? "読み込み中" : "深度推定中")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else if let selectedFileName = viewModel.selectedFileName {
@@ -94,7 +98,7 @@ struct ContentView: View {
                     title: "深度マップ",
                     image: viewModel.depthImage,
                     systemImageName: "square.stack.3d.down.right",
-                    message: viewModel.hasSelectedImage ? "深度推定は次の段階で実装" : "推定結果なし"
+                    message: viewModel.isEstimatingDepth ? "深度推定中" : "推定結果なし"
                 )
             }
         }
@@ -158,6 +162,25 @@ private extension Image {
     }
 }
 
+private extension ContentView {
+    static func makeDepthEstimator() -> any DepthEstimating {
+        do {
+            return try DepthAnythingV2DepthEstimator()
+        } catch {
+            return UnavailableDepthEstimator()
+        }
+    }
+}
+
+private struct UnavailableDepthEstimator: DepthEstimating {
+    func estimateDepth(for image: CGImage) async throws -> CGImage {
+        throw DepthEstimatorUnavailableError()
+    }
+}
+
+private struct DepthEstimatorUnavailableError: Error {}
+
 #Preview {
     ContentView()
 }
+
