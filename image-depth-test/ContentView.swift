@@ -9,8 +9,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
+    @State private var viewModel = ImageDepthViewModel()
     @State private var isFileImporterPresented = false
-    @State private var selectedFileName: String?
 
     var body: some View {
         VStack(spacing: 16) {
@@ -26,15 +26,17 @@ struct ContentView: View {
         ) { result in
             switch result {
             case .success(let urls):
-                selectedFileName = urls.first?.lastPathComponent
+                Task {
+                    await viewModel.loadImage(from: urls.first)
+                }
             case .failure:
-                selectedFileName = nil
+                viewModel.clearSelection()
             }
         }
     }
 
     private var fileImportPane: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 Button {
                     isFileImporterPresented = true
@@ -43,7 +45,13 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                if let selectedFileName {
+                if viewModel.isLoadingImage {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("読み込み中")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if let selectedFileName = viewModel.selectedFileName {
                     Text(selectedFileName)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -56,6 +64,12 @@ struct ContentView: View {
                 }
 
                 Spacer()
+            }
+
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
         .padding(16)
@@ -71,14 +85,16 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 ImagePreviewPanel(
                     title: "入力画像",
+                    image: viewModel.inputImage,
                     systemImageName: "photo",
-                    message: selectedFileName == nil ? "画像未選択" : "画像表示は次の段階で実装"
+                    message: viewModel.isLoadingImage ? "読み込み中" : "画像未選択"
                 )
 
                 ImagePreviewPanel(
                     title: "深度マップ",
+                    image: viewModel.depthImage,
                     systemImageName: "square.stack.3d.down.right",
-                    message: selectedFileName == nil ? "推定結果なし" : "深度推定は次の段階で実装"
+                    message: viewModel.hasSelectedImage ? "深度推定は次の段階で実装" : "推定結果なし"
                 )
             }
         }
@@ -90,6 +106,7 @@ struct ContentView: View {
 
 private struct ImagePreviewPanel: View {
     let title: String
+    let image: NSImage?
     let systemImageName: String
     let message: String
 
@@ -98,24 +115,46 @@ private struct ImagePreviewPanel: View {
             Text(title)
                 .font(.subheadline.weight(.semibold))
 
-            VStack(spacing: 12) {
-                Image(systemName: systemImageName)
-                    .font(.system(size: 42, weight: .regular))
-                    .foregroundStyle(.secondary)
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.background)
 
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                if let image {
+                    Image(platformImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(12)
+                } else {
+                    placeholder
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.background, in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(.quaternary, lineWidth: 1)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 12) {
+            Image(systemName: systemImageName)
+                .font(.system(size: 42, weight: .regular))
+                .foregroundStyle(.secondary)
+
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding(16)
+    }
+}
+
+private extension Image {
+    init(platformImage: NSImage) {
+        self.init(nsImage: platformImage)
     }
 }
 
