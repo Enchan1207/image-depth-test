@@ -6,9 +6,9 @@
 import SwiftUI
 
 struct DepthRangeEditor: View {
-    let layerCount: Int
+    let layers: [DepthLayerDefinition]
     @Binding var boundaries: [Double]
-    @Binding var selectedLayerIndex: Int
+    @Binding var selectedLayerID: DepthLayerItem.ID
 
     private let handleWidth: CGFloat = 14
 
@@ -29,17 +29,17 @@ struct DepthRangeEditor: View {
 
                 ZStack(alignment: .leading) {
                     HStack(spacing: 0) {
-                        ForEach(0..<layerCount, id: \.self) { index in
-                            DepthLayerDefinition.colors[index]
-                                .frame(width: segmentWidth(for: index, totalWidth: width))
+                        ForEach(layers) { layer in
+                            layer.color
+                                .frame(width: segmentWidth(for: layer.index, totalWidth: width))
                                 .onTapGesture {
-                                    selectedLayerIndex = index
+                                    selectedLayerID = layer.id
                                 }
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                    ForEach(0..<(layerCount - 1), id: \.self) { index in
+                    ForEach(0..<max(0, min(layers.count - 1, boundaries.count)), id: \.self) { index in
                         RoundedRectangle(cornerRadius: 3)
                             .fill(.white)
                             .shadow(radius: 2)
@@ -52,7 +52,9 @@ struct DepthRangeEditor: View {
                             .gesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
-                                        selectedLayerIndex = min(index + 1, layerCount - 1)
+                                        if let layer = layers[safe: min(index + 1, layers.count - 1)] {
+                                            selectedLayerID = layer.id
+                                        }
                                         updateBoundary(index, locationX: value.location.x, width: width)
                                     }
                             )
@@ -71,7 +73,7 @@ struct DepthRangeEditor: View {
 
     private func segmentWidth(for index: Int, totalWidth: CGFloat) -> CGFloat {
         let lowerBound = index == 0 ? 0 : boundaries[index - 1]
-        let upperBound = index == layerCount - 1 ? 1 : boundaries[index]
+        let upperBound = index == layers.count - 1 ? 1 : boundaries[index]
         return max(0, CGFloat(upperBound - lowerBound) * totalWidth)
     }
 
@@ -80,7 +82,7 @@ struct DepthRangeEditor: View {
 
         let minimumGap = 0.04
         let previousBoundary = index == 0 ? 0 : boundaries[index - 1]
-        let nextBoundary = index == layerCount - 2 ? 1 : boundaries[index + 1]
+        let nextBoundary = index == layers.count - 2 ? 1 : boundaries[index + 1]
         let normalizedLocation = Double(locationX / width)
         boundaries[index] = min(max(normalizedLocation, previousBoundary + minimumGap), nextBoundary - minimumGap)
     }

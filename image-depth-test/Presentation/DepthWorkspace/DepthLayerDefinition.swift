@@ -3,23 +3,20 @@
 //  image-depth-test
 //
 
+import AppKit
+import Foundation
 import SwiftUI
 
 struct DepthLayerDefinition: Identifiable {
+    let id: UUID
     let index: Int
     let name: String
     let lowerBound: Double
     let upperBound: Double
-    let renderColor: DepthLayerRenderColor
-
-    var id: Int { index }
+    let nsColor: NSColor
 
     var color: Color {
-        Color(
-            red: Double(renderColor.red) / 255,
-            green: Double(renderColor.green) / 255,
-            blue: Double(renderColor.blue) / 255
-        )
+        Color(nsColor: displayColor)
     }
 
     var renderSpec: DepthLayerRenderSpec? {
@@ -34,25 +31,20 @@ struct DepthLayerDefinition: Identifiable {
         )
     }
 
-    static let names = ["Far", "Back", "Mid", "Front"]
-    static let renderColors = [
-        DepthLayerRenderColor(red: 76, green: 88, blue: 216),
-        DepthLayerRenderColor(red: 0, green: 147, blue: 155),
-        DepthLayerRenderColor(red: 236, green: 188, blue: 54),
-        DepthLayerRenderColor(red: 225, green: 72, blue: 82)
-    ]
-
-    static var colors: [Color] {
-        renderColors.map { renderColor in
-            Color(
-                red: Double(renderColor.red) / 255,
-                green: Double(renderColor.green) / 255,
-                blue: Double(renderColor.blue) / 255
-            )
-        }
-    }
-
     var rangeText: String {
         "\(lowerBound.formatted(.number.precision(.fractionLength(2)))) - \(upperBound.formatted(.number.precision(.fractionLength(2))))"
+    }
+
+    private var displayColor: NSColor {
+        nsColor.usingColorSpace(.sRGB) ?? nsColor
+    }
+
+    private var renderColor: DepthLayerRenderColor {
+        let color = displayColor
+        return DepthLayerRenderColor(
+            red: UInt8((color.redComponent * 255).rounded()),
+            green: UInt8((color.greenComponent * 255).rounded()),
+            blue: UInt8((color.blueComponent * 255).rounded())
+        )
     }
 }

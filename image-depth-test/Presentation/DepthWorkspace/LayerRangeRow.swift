@@ -9,8 +9,10 @@ struct LayerRangeRow: View {
     let layer: DepthLayerDefinition
     let isSelected: Bool
     let isVisible: Bool
+    let canDelete: Bool
     let action: () -> Void
     let visibilityAction: () -> Void
+    let deleteAction: () -> Void
 
     var body: some View {
         Button(action: action) {
@@ -44,6 +46,15 @@ struct LayerRangeRow: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(isVisible ? .secondary : .tertiary)
                 .help(isVisible ? "切り抜きレイヤを非表示" : "切り抜きレイヤを表示")
+
+                Button(role: .destructive, action: deleteAction) {
+                    Image(systemName: "trash")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(canDelete ? .secondary : .tertiary)
+                .disabled(!canDelete)
+                .help(canDelete ? "レイヤを削除" : "レイヤは2つ以上必要です")
             }
             .padding(10)
             .contentShape(Rectangle())

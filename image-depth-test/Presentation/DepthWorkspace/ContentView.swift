@@ -5,6 +5,7 @@
 //  Created by enchantcode on 2026/07/04.
 //
 
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -12,15 +13,19 @@ struct ContentView: View {
     @State private var viewModel: ImageDepthViewModel
     @State private var isFileImporterPresented = false
     @State private var previewMode: DepthPreviewMode = .overlay
-    @State private var layerCount = 4
-    @State private var selectedLayerIndex = 3
-    @State private var depthBoundaries = [0.22, 0.48, 0.74]
+    @State private var layerItems: [DepthLayerItem]
+    @State private var selectedLayerID: DepthLayerItem.ID
+    @State private var boundaries = [0.22, 0.48, 0.74]
     @State private var overlayOpacity = 0.56
-    @State private var visibleLayerIndices: Set<Int> = [0, 1, 2, 3]
+    @State private var visibleLayerIDs: Set<DepthLayerItem.ID>
     @State private var layerRenderingTask: Task<Void, Never>?
 
     init(depthEstimator: any DepthEstimating) {
+        let initialLayerItems = DepthLayerItem.initialItems
         _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
+        _layerItems = State(initialValue: initialLayerItems)
+        _selectedLayerID = State(initialValue: initialLayerItems.last?.id ?? UUID())
+        _visibleLayerIDs = State(initialValue: Set(initialLayerItems.map(\.id)))
     }
 
     var body: some View {
@@ -49,13 +54,7 @@ struct ContentView: View {
                 viewModel.clearSelection()
             }
         }
-        .onChange(of: layerCount) { _, newValue in
-            selectedLayerIndex = min(selectedLayerIndex, newValue - 1)
-            ensureBoundaryStorageForLayerCount(newValue)
-            syncVisibleLayers(for: newValue)
-            scheduleLayerRenderingUpdate()
-        }
-        .onChange(of: depthBoundaries) { _, _ in
+        .onChange(of: boundaries) { _, _ in
             scheduleLayerRenderingUpdate()
         }
         .onChange(of: overlayOpacity) { _, _ in
@@ -154,9 +153,9 @@ struct ContentView: View {
             )
 
             DepthRangeEditor(
-                layerCount: layerCount,
-                boundaries: $depthBoundaries,
-                selectedLayerIndex: $selectedLayerIndex
+                layers: layerDefinitions,
+                boundaries: $boundaries,
+                selectedLayerID: $selectedLayerID
             )
         }
         .padding(16)
@@ -169,11 +168,11 @@ struct ContentView: View {
             Text("レイヤ設定")
                 .font(.headline)
 
-            Picker("分割数", selection: $layerCount) {
-                Text("3 Layers").tag(3)
-                Text("4 Layers").tag(4)
+            Button {
+                splitSelectedLayer()
+            } label: {
+                Label("分割して追加", systemImage: "plus.rectangle.on.rectangle")
             }
-            .pickerStyle(.segmented)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("オーバーレイ")
@@ -207,26 +206,18 @@ struct ContentView: View {
                     }
                 }
 
-                Button {
-                    Task {
-                        await generateLayerRenderings()
-                        previewMode = .isolated
-                    }
-                } label: {
-                    Label("切り抜きレイヤを表示", systemImage: "scope")
-                }
-                .frame(maxWidth: .infinity)
-                .disabled(!viewModel.canGenerateLayerRenderings || viewModel.isGeneratingLayerRenderings)
-
                 ForEach(layerDefinitions) { layer in
                     LayerRangeRow(
                         layer: layer,
-                        isSelected: layer.index == selectedLayerIndex,
-                        isVisible: visibleLayerIndices.contains(layer.index)
+                        isSelected: layer.id == selectedLayerID,
+                        isVisible: visibleLayerIDs.contains(layer.id),
+                        canDelete: layerItems.count > 2
                     ) {
-                        selectedLayerIndex = layer.index
+                        selectedLayerID = layer.id
                     } visibilityAction: {
-                        toggleLayerVisibility(layer.index)
+                        toggleLayerVisibility(layer.id)
+                    } deleteAction: {
+                        deleteLayer(id: layer.id)
                     }
                 }
             }
@@ -240,16 +231,18 @@ struct ContentView: View {
     }
 
     private var layerDefinitions: [DepthLayerDefinition] {
-        (0..<layerCount).map { index in
-            let lowerBound = index == 0 ? 0 : depthBoundaries[index - 1]
-            let upperBound = index == layerCount - 1 ? 1 : depthBoundaries[index]
+        layerItems.indices.map { index in
+            let item = layerItems[index]
+            let lowerBound = index == 0 ? 0 : boundaries[index - 1]
+            let upperBound = index == layerItems.count - 1 ? 1 : boundaries[index]
 
             return DepthLayerDefinition(
+                id: item.id,
                 index: index,
-                name: DepthLayerDefinition.names[index],
+                name: item.name,
                 lowerBound: lowerBound,
                 upperBound: upperBound,
-                renderColor: DepthLayerDefinition.renderColors[index]
+                nsColor: item.color
             )
         }
     }
@@ -258,14 +251,19 @@ struct ContentView: View {
         layerDefinitions.compactMap(\.renderSpec)
     }
 
+    private var selectedLayerIndex: Int {
+        layerItems.firstIndex { $0.id == selectedLayerID } ?? 0
+    }
+
     private var visibleLayerCutoutImages: [NSImage] {
-        viewModel.layerCutoutImages.enumerated().compactMap { index, image in
-            visibleLayerIndices.contains(index) ? image : nil
+        layerDefinitions.enumerated().compactMap { index, layer in
+            guard visibleLayerIDs.contains(layer.id) else { return nil }
+            return viewModel.layerCutoutImages[safe: index]
         }
     }
 
     private func autoSplitDepthRanges() async {
-        guard let suggestedBoundaries = await viewModel.suggestDepthBoundaries(layerCount: layerCount) else {
+        guard let suggestedBoundaries = await viewModel.suggestDepthBoundaries(layerCount: layerItems.count) else {
             resetDepthRanges()
             return
         }
@@ -275,8 +273,8 @@ struct ContentView: View {
     }
 
     private func resetDepthRanges() {
-        depthBoundaries = [0.22, 0.48, 0.74]
-        selectedLayerIndex = min(3, layerCount - 1)
+        boundaries = defaultBoundaries(for: layerItems.count)
+        selectedLayerID = layerItems[min(layerItems.count - 1, selectedLayerIndex)].id
         scheduleLayerRenderingUpdate()
     }
 
@@ -291,7 +289,7 @@ struct ContentView: View {
 
     private func generateLayerRenderings() async {
         let specs = layerRenderSpecs
-        guard specs.count == layerCount else { return }
+        guard specs.count == layerItems.count else { return }
 
         await viewModel.generateLayerRenderings(
             layers: specs,
@@ -299,9 +297,47 @@ struct ContentView: View {
         )
     }
 
+    private func splitSelectedLayer() {
+        let index = selectedLayerIndex
+        guard let selectedDefinition = layerDefinitions[safe: index] else { return }
+
+        let splitBoundary = (selectedDefinition.lowerBound + selectedDefinition.upperBound) / 2
+        let insertedItem = DepthLayerItem(
+            name: nextLayerName(after: selectedDefinition.name),
+            color: nextLayerColor(for: layerItems.count)
+        )
+
+        layerItems.insert(insertedItem, at: index + 1)
+        boundaries.insert(splitBoundary, at: index)
+        selectedLayerID = insertedItem.id
+        visibleLayerIDs.insert(insertedItem.id)
+        scheduleLayerRenderingUpdate()
+    }
+
+    private func deleteLayer(id: DepthLayerItem.ID) {
+        guard layerItems.count > 2,
+              let index = layerItems.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+
+        let removedItem = layerItems.remove(at: index)
+        visibleLayerIDs.remove(removedItem.id)
+
+        if boundaries.indices.contains(index) {
+            boundaries.remove(at: index)
+        } else if !boundaries.isEmpty {
+            boundaries.removeLast()
+        }
+
+        let nextIndex = min(index, layerItems.count - 1)
+        selectedLayerID = layerItems[nextIndex].id
+        syncVisibleLayers()
+        scheduleLayerRenderingUpdate()
+    }
+
     private func setActiveBoundaries(_ activeBoundaries: [Double]) {
-        var nextBoundaries = depthBoundaries
-        let sanitizedBoundaries = sanitized(activeBoundaries, expectedCount: layerCount - 1)
+        var nextBoundaries = boundaries
+        let sanitizedBoundaries = sanitized(activeBoundaries, expectedCount: layerItems.count - 1)
 
         for index in sanitizedBoundaries.indices {
             if index < nextBoundaries.count {
@@ -311,30 +347,57 @@ struct ContentView: View {
             }
         }
 
-        depthBoundaries = nextBoundaries
+        boundaries = nextBoundaries
     }
 
-    private func ensureBoundaryStorageForLayerCount(_ newLayerCount: Int) {
-        guard newLayerCount == 4, depthBoundaries.count < 3 else { return }
-
-        while depthBoundaries.count < 3 {
-            depthBoundaries.append(0.75)
+    private func ensureBoundaryStorage(for layerCount: Int) {
+        while boundaries.count < max(0, layerCount - 1) {
+            let fallbackValue = Double(boundaries.count + 1) / Double(layerCount)
+            boundaries.append(fallbackValue)
         }
     }
 
-    private func syncVisibleLayers(for newLayerCount: Int) {
-        visibleLayerIndices = visibleLayerIndices.filter { $0 < newLayerCount }
+    private func defaultBoundaries(for layerCount: Int) -> [Double] {
+        guard layerCount > 1 else { return [] }
+        return (1..<layerCount).map { Double($0) / Double(layerCount) }
+    }
 
-        if visibleLayerIndices.isEmpty {
-            visibleLayerIndices.insert(min(selectedLayerIndex, newLayerCount - 1))
+    private func nextLayerName(after name: String) -> String {
+        let baseName = "\(name) Split"
+        guard layerItems.contains(where: { $0.name == baseName }) else {
+            return baseName
+        }
+
+        var suffix = 2
+        while layerItems.contains(where: { $0.name == "\(baseName) \(suffix)" }) {
+            suffix += 1
+        }
+        return "\(baseName) \(suffix)"
+    }
+
+    private func nextLayerColor(for index: Int) -> NSColor {
+        DepthLayerItem.presetColor(at: index)
+    }
+
+    private func syncSelection() {
+        guard !layerItems.contains(where: { $0.id == selectedLayerID }) else { return }
+        selectedLayerID = layerItems.last?.id ?? selectedLayerID
+    }
+
+    private func syncVisibleLayers() {
+        let activeIDs = Set(layerItems.map(\.id))
+        visibleLayerIDs = visibleLayerIDs.intersection(activeIDs)
+
+        if visibleLayerIDs.isEmpty, let selectedItem = layerItems[safe: selectedLayerIndex] {
+            visibleLayerIDs.insert(selectedItem.id)
         }
     }
 
-    private func toggleLayerVisibility(_ index: Int) {
-        if visibleLayerIndices.contains(index) {
-            visibleLayerIndices.remove(index)
+    private func toggleLayerVisibility(_ id: DepthLayerItem.ID) {
+        if visibleLayerIDs.contains(id) {
+            visibleLayerIDs.remove(id)
         } else {
-            visibleLayerIndices.insert(index)
+            visibleLayerIDs.insert(id)
         }
 
         previewMode = .isolated
