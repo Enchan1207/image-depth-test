@@ -13,6 +13,7 @@ final class MaskEditorWindowRegistry {
     func openEditor(
         layerID: UUID,
         layerName: String,
+        layerColor: NSColor,
         inputImage: CGImage,
         initialMask: CGImage,
         onSave: @escaping (CGImage) -> Void
@@ -26,6 +27,7 @@ final class MaskEditorWindowRegistry {
         let session = MaskEditorSession(
             layerID: layerID,
             layerName: layerName,
+            layerColor: layerColor,
             inputImage: inputImage,
             initialMask: initialMask,
             onSave: onSave

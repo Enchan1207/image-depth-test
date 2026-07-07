@@ -6,6 +6,7 @@
 import AppKit
 import Foundation
 import Observation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -17,6 +18,7 @@ final class MaskEditorSession {
 
     let layerID: UUID
     let layerName: String
+    let layerTintColor: Color
     let imageSize: CGSize
     let baseMaskImage: NSImage
     let originalImage: NSImage
@@ -33,12 +35,14 @@ final class MaskEditorSession {
     init(
         layerID: UUID,
         layerName: String,
+        layerColor: NSColor,
         inputImage: CGImage,
         initialMask: CGImage,
         onSave: @escaping (CGImage) -> Void
     ) {
         self.layerID = layerID
         self.layerName = layerName
+        self.layerTintColor = Color(nsColor: layerColor)
         self.inputImage = inputImage
         self.baseMask = initialMask
         self.onSave = onSave

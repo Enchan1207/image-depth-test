@@ -127,6 +127,15 @@ struct MaskEditorView: View {
                         .scaledToFit()
                         .opacity(0.88)
                         .frame(width: session.imageSize.width, height: session.imageSize.height)
+
+                    session.layerTintColor
+                        .opacity(0.18)
+                        .mask {
+                            Image(nsImage: session.maskedPreviewImage)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: session.imageSize.width, height: session.imageSize.height)
+                        }
                 }
                 .padding(imagePadding)
                 .frame(width: contentSize.width, height: contentSize.height)

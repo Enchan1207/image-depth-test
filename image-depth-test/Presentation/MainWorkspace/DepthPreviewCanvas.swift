@@ -8,6 +8,7 @@ import SwiftUI
 struct DepthPreviewCanvasLayer: Identifiable {
     let id: AnyHashable
     let image: NSImage
+    let tintColor: Color?
 }
 
 struct DepthPreviewCanvas: View {
@@ -66,16 +67,30 @@ struct DepthPreviewCanvas: View {
             ) {
                 ZStack {
                     ForEach(layers) { layer in
-                        Image(nsImage: layer.image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(width: imageSize.width, height: imageSize.height)
+                        ZStack {
+                            layerImage(layer.image, size: imageSize)
+
+                            if let tintColor = layer.tintColor {
+                                tintColor
+                                    .opacity(0.18)
+                                    .mask {
+                                        layerImage(layer.image, size: imageSize)
+                                    }
+                            }
+                        }
                     }
                 }
                 .padding(imagePadding)
                 .frame(width: contentSize.width, height: contentSize.height)
             }
         }
+    }
+
+    private func layerImage(_ image: NSImage, size: CGSize) -> some View {
+        Image(nsImage: image)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size.width, height: size.height)
     }
 
     private func placeholder(systemImageName: String, message: String) -> some View {

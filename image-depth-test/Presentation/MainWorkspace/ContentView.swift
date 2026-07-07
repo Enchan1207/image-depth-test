@@ -164,11 +164,11 @@ struct ContentView: View {
         var layers: [DepthPreviewCanvasLayer] = []
 
         if visiblePreviewTargets.contains(.original), let inputImage = viewModel.inputImage {
-            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.original, image: inputImage))
+            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.original, image: inputImage, tintColor: nil))
         }
 
         if visiblePreviewTargets.contains(.depthMap), let depthImage = viewModel.depthImage {
-            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.depthMap, image: depthImage))
+            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.depthMap, image: depthImage, tintColor: nil))
         }
 
         for layer in layerDefinitions {
@@ -178,7 +178,7 @@ struct ContentView: View {
                 continue
             }
 
-            layers.append(DepthPreviewCanvasLayer(id: target, image: image))
+            layers.append(DepthPreviewCanvasLayer(id: target, image: image, tintColor: layer.color))
         }
 
         return layers
@@ -378,6 +378,7 @@ struct ContentView: View {
         maskEditorRegistry.openEditor(
             layerID: layer.id,
             layerName: layer.name,
+            layerColor: layer.nsColor,
             inputImage: inputImage,
             initialMask: initialMask
         ) { mask in
