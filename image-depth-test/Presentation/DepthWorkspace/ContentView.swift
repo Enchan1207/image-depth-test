@@ -16,8 +16,12 @@ struct ContentView: View {
     @State private var selectedLayerID: DepthLayerItem.ID
     @State private var visiblePreviewTargets: Set<PreviewDisplayTarget>
     @State private var boundaries = [0.22, 0.48, 0.74]
+    @State private var lastAcceptedBoundaries = [0.22, 0.48, 0.74]
     @State private var layerRenderingTask: Task<Void, Never>?
     @State private var isEditingDepthRange = false
+    @State private var isRevertingDepthBoundaryChange = false
+    @State private var editedMasksByLayerID: [UUID: CGImage] = [:]
+    @State private var maskEditorRegistry = MaskEditorWindowRegistry()
 
     private let overlayOpacity = 0.56
 
@@ -57,6 +61,27 @@ struct ContentView: View {
             }
         }
         .onChange(of: boundaries) { _, _ in
+            if isRevertingDepthBoundaryChange {
+                isRevertingDepthBoundaryChange = false
+                return
+            }
+
+            if !editedMasksByLayerID.isEmpty {
+                let shouldDiscard = confirmDiscardEditedMasks(
+                    messageText: "深度レンジを変更すると編集済みマスクは再構成されます。",
+                    informativeText: "続行すると全レイヤの編集済みマスクを破棄します。"
+                )
+
+                guard shouldDiscard else {
+                    isRevertingDepthBoundaryChange = true
+                    boundaries = lastAcceptedBoundaries
+                    return
+                }
+
+                discardEditedMasksAndCloseEditors()
+            }
+
+            lastAcceptedBoundaries = boundaries
             scheduleLayerRenderingUpdate(includeCutouts: !isEditingDepthRange)
         }
     }
@@ -64,7 +89,13 @@ struct ContentView: View {
     private var fileImportPane: some View {
         HStack(spacing: 12) {
             Button {
-                isFileImporterPresented = true
+                if confirmDiscardEditedMasks(
+                    messageText: "画像を変更すると編集済みマスクは破棄されます。",
+                    informativeText: "続行すると開いているマスクエディタも閉じます。"
+                ) {
+                    discardEditedMasksAndCloseEditors()
+                    isFileImporterPresented = true
+                }
             } label: {
                 Label("画像を読み込む", systemImage: "photo.badge.plus")
             }
@@ -77,6 +108,7 @@ struct ContentView: View {
             Button {
                 Task {
                     await viewModel.estimateDepthForSelectedImage()
+                    discardEditedMasksAndCloseEditors()
                     await generateLayerRenderings()
                 }
             } label: {
@@ -182,9 +214,15 @@ struct ContentView: View {
                     LayerRangeRow(
                         layer: layer,
                         isSelected: layer.id == selectedLayerID,
-                        canDelete: layerItems.count > 2
+                        canDelete: layerItems.count > 2,
+                        canEditMask: canEditMask(for: layer),
+                        isMaskEdited: editedMasksByLayerID[layer.id] != nil
                     ) {
                         selectedLayerID = layer.id
+                    } editMaskAction: {
+                        Task {
+                            await openMaskEditor(for: layer)
+                        }
                     } deleteAction: {
                         deleteLayer(id: layer.id)
                     }
@@ -361,6 +399,15 @@ struct ContentView: View {
     }
 
     private func autoSplitDepthRanges() async {
+        guard confirmDiscardEditedMasks(
+            messageText: "深度レンジの自動分割で編集済みマスクは再構成されます。",
+            informativeText: "続行すると全レイヤの編集済みマスクを破棄します。"
+        ) else {
+            return
+        }
+
+        discardEditedMasksAndCloseEditors()
+
         guard let suggestedBoundaries = await viewModel.suggestDepthBoundaries(layerCount: layerItems.count) else {
             resetDepthRanges()
             return
@@ -371,6 +418,14 @@ struct ContentView: View {
     }
 
     private func resetDepthRanges() {
+        guard confirmDiscardEditedMasks(
+            messageText: "深度レンジのリセットで編集済みマスクは再構成されます。",
+            informativeText: "続行すると全レイヤの編集済みマスクを破棄します。"
+        ) else {
+            return
+        }
+
+        discardEditedMasksAndCloseEditors()
         boundaries = defaultBoundaries(for: layerItems.count)
         selectedLayerID = layerItems[min(layerItems.count - 1, selectedLayerIndex)].id
         scheduleLayerRenderingUpdate(includeCutouts: true)
@@ -402,7 +457,9 @@ struct ContentView: View {
 
         await viewModel.generateLayerRenderings(
             layers: specs,
-            overlayOpacity: overlayOpacity
+            overlayOpacity: overlayOpacity,
+            editedMasksByLayerID: editedMasksByLayerID,
+            layerIDsByIndex: layerDefinitions.map(\.id)
         )
     }
 
@@ -428,6 +485,7 @@ struct ContentView: View {
 
         layerItems.insert(insertedItem, at: index + 1)
         boundaries.insert(splitBoundary, at: index)
+        lastAcceptedBoundaries = boundaries
         selectedLayerID = insertedItem.id
         visiblePreviewTargets.insert(.layer(insertedItem.id))
         scheduleLayerRenderingUpdate(includeCutouts: true)
@@ -440,6 +498,7 @@ struct ContentView: View {
         }
 
         let removedItem = layerItems.remove(at: index)
+        editedMasksByLayerID.removeValue(forKey: removedItem.id)
         visiblePreviewTargets.remove(.layer(removedItem.id))
 
         if boundaries.indices.contains(index) {
@@ -450,6 +509,7 @@ struct ContentView: View {
 
         let nextIndex = min(index, layerItems.count - 1)
         selectedLayerID = layerItems[nextIndex].id
+        lastAcceptedBoundaries = boundaries
         scheduleLayerRenderingUpdate(includeCutouts: true)
     }
 
@@ -466,6 +526,55 @@ struct ContentView: View {
         }
 
         boundaries = nextBoundaries
+    }
+
+    private func canEditMask(for layer: DepthLayerDefinition) -> Bool {
+        viewModel.canEditLayerMasks && layer.renderSpec != nil
+    }
+
+    private func openMaskEditor(for layer: DepthLayerDefinition) async {
+        guard let inputImage = viewModel.inputCGImageForEditing(),
+              let renderSpec = layer.renderSpec else {
+            return
+        }
+
+        let initialMask: CGImage?
+        if let editedMask = editedMasksByLayerID[layer.id] {
+            initialMask = editedMask
+        } else {
+            initialMask = await viewModel.makeInitialMask(for: renderSpec)
+        }
+
+        guard let initialMask else { return }
+
+        maskEditorRegistry.openEditor(
+            layerID: layer.id,
+            layerName: layer.name,
+            inputImage: inputImage,
+            initialMask: initialMask
+        ) { mask in
+            editedMasksByLayerID[layer.id] = mask
+            Task {
+                await generateLayerRenderings()
+            }
+        }
+    }
+
+    private func confirmDiscardEditedMasks(messageText: String, informativeText: String) -> Bool {
+        guard !editedMasksByLayerID.isEmpty else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = messageText
+        alert.informativeText = informativeText
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "続行")
+        alert.addButton(withTitle: "キャンセル")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func discardEditedMasksAndCloseEditors() {
+        editedMasksByLayerID.removeAll()
+        maskEditorRegistry.closeAllDiscardingChanges()
     }
 
     private func ensureBoundaryStorage(for layerCount: Int) {

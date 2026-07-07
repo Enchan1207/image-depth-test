@@ -9,7 +9,10 @@ struct LayerRangeRow: View {
     let layer: DepthLayerDefinition
     let isSelected: Bool
     let canDelete: Bool
+    let canEditMask: Bool
+    let isMaskEdited: Bool
     let action: () -> Void
+    let editMaskAction: () -> Void
     let deleteAction: () -> Void
 
     var body: some View {
@@ -34,6 +37,15 @@ struct LayerRangeRow: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.tint)
                 }
+
+                Button(action: editMaskAction) {
+                    Image(systemName: isMaskEdited ? "paintbrush.pointed.fill" : "paintbrush.pointed")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(canEditMask ? .secondary : .tertiary)
+                .disabled(!canEditMask)
+                .help(canEditMask ? "マスクを編集" : "マスク編集には画像・深度・レイヤ生成が必要です")
 
                 Button(role: .destructive, action: deleteAction) {
                     Image(systemName: "trash")

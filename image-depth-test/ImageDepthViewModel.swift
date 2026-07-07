@@ -36,6 +36,10 @@ final class ImageDepthViewModel {
         inputCGImage != nil && depthCGImage != nil
     }
 
+    var canEditLayerMasks: Bool {
+        inputCGImage != nil && depthCGImage != nil && !layerCutoutImages.isEmpty
+    }
+
     init(depthEstimator: any DepthEstimating, layerRenderer: any DepthLayerRendering) {
         self.depthEstimator = depthEstimator
         self.layerRenderer = layerRenderer
@@ -90,7 +94,29 @@ final class ImageDepthViewModel {
         isEstimatingDepth = false
     }
 
-    func generateLayerRenderings(layers: [DepthLayerRenderSpec], overlayOpacity: Double) async {
+    func makeInitialMask(for layer: DepthLayerRenderSpec) async -> CGImage? {
+        guard let depthCGImage else { return nil }
+
+        do {
+            return try await Task.detached(priority: .userInitiated) {
+                try DepthLayerMasking.makeMask(from: depthCGImage, range: layer.range)
+            }.value
+        } catch {
+            errorMessage = "マスク画像の生成に失敗しました"
+            return nil
+        }
+    }
+
+    func inputCGImageForEditing() -> CGImage? {
+        inputCGImage
+    }
+
+    func generateLayerRenderings(
+        layers: [DepthLayerRenderSpec],
+        overlayOpacity: Double,
+        editedMasksByLayerID: [UUID: CGImage] = [:],
+        layerIDsByIndex: [UUID] = []
+    ) async {
         guard let inputCGImage, let depthCGImage else {
             clearLayerRenderings()
             return
@@ -102,13 +128,34 @@ final class ImageDepthViewModel {
             let renderer = layerRenderer
             let depthPixelBuffer = depthPixelBuffer
             let result = try await Task.detached(priority: .userInitiated) {
-                try renderer.makeLayerRenderings(
+                var result = try renderer.makeLayerRenderings(
                     from: inputCGImage,
                     depthImage: depthCGImage,
                     depthPixelBuffer: depthPixelBuffer,
                     layers: layers,
                     overlayOpacity: overlayOpacity
                 )
+
+                if !editedMasksByLayerID.isEmpty {
+                    var cutouts = result.cutouts
+                    for layer in layers where layerIDsByIndex.indices.contains(layer.index) {
+                        let layerID = layerIDsByIndex[layer.index]
+                        guard let mask = editedMasksByLayerID[layerID],
+                              cutouts.indices.contains(layer.index) else {
+                            continue
+                        }
+
+                        cutouts[layer.index] = try DepthLayerMasking.apply(mask: mask, to: inputCGImage)
+                    }
+
+                    result = DepthLayerRenderingResult(
+                        layerPreview: result.layerPreview,
+                        overlayPreview: result.overlayPreview,
+                        cutouts: cutouts
+                    )
+                }
+
+                return result
             }.value
 
             layerPreviewImage = Self.makePlatformImage(from: result.layerPreview)

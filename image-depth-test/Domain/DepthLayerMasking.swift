@@ -46,6 +46,11 @@ struct DepthLayerRenderSpec: Equatable, Sendable {
     let color: DepthLayerRenderColor
 }
 
+struct DepthLayerEditedMask: Sendable {
+    let layerID: UUID
+    let mask: CGImage
+}
+
 struct DepthLayerRenderingResult: Sendable {
     let layerPreview: CGImage
     let overlayPreview: CGImage
