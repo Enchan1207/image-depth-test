@@ -5,13 +5,18 @@
 
 import SwiftUI
 
+struct DepthPreviewCanvasLayer: Identifiable {
+    let id: AnyHashable
+    let image: NSImage
+}
+
 struct DepthPreviewCanvas: View {
-    let mode: DepthPreviewMode
-    let inputImage: NSImage?
-    let depthImage: NSImage?
-    let layerPreviewImage: NSImage?
-    let layerOverlayImage: NSImage?
-    let cutoutImages: [NSImage]
+    private let imagePadding: CGFloat = 14
+
+    let layers: [DepthPreviewCanvasLayer]
+    let workspaceID: AnyHashable
+    let placeholderSystemImage: String
+    let placeholderMessage: String
     let isLoading: Bool
     let selectedLayer: DepthLayerDefinition?
 
@@ -20,18 +25,7 @@ struct DepthPreviewCanvas: View {
             RoundedRectangle(cornerRadius: 8)
                 .fill(.background)
 
-            switch mode {
-            case .original:
-                imageView(inputImage, placeholderSystemImage: "photo", message: imageMessage)
-            case .depth:
-                imageView(depthImage, placeholderSystemImage: "square.stack.3d.down.right", message: depthMessage)
-            case .layers:
-                imageView(layerPreviewImage, placeholderSystemImage: "square.3.layers.3d", message: layerMessage)
-            case .overlay:
-                imageView(layerOverlayImage, placeholderSystemImage: "circle.lefthalf.filled", message: layerMessage)
-            case .isolated:
-                cutoutStack
-            }
+            previewContent
 
             if isLoading {
                 ProgressView()
@@ -42,7 +36,7 @@ struct DepthPreviewCanvas: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay(alignment: .topLeading) {
-            if let selectedLayer, mode != .original, depthImage != nil {
+            if let selectedLayer {
                 Label("\(selectedLayer.name)  \(selectedLayer.rangeText)", systemImage: "slider.horizontal.below.rectangle")
                     .font(.caption.weight(.semibold))
                     .padding(.horizontal, 10)
@@ -55,49 +49,32 @@ struct DepthPreviewCanvas: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(.quaternary, lineWidth: 1)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
-    private var cutoutStack: some View {
-        if cutoutImages.isEmpty {
-            placeholder(systemImageName: "eye.slash", message: cutoutMessage)
+    private var previewContent: some View {
+        if layers.isEmpty {
+            placeholder(systemImageName: placeholderSystemImage, message: placeholderMessage)
         } else {
-            ZStack {
-                ForEach(Array(cutoutImages.enumerated()), id: \.offset) { _, image in
-                    Image(platformImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(14)
+            let imageSize = maximumImageSize(in: layers.map(\.image))
+            let contentSize = paddedSize(for: imageSize)
+
+            ZoomableScrollView(
+                contentSize: contentSize,
+                contentID: workspaceID
+            ) {
+                ZStack {
+                    ForEach(layers) { layer in
+                        Image(platformImage: layer.image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: imageSize.width, height: imageSize.height)
+                    }
                 }
+                .padding(imagePadding)
+                .frame(width: contentSize.width, height: contentSize.height)
             }
-        }
-    }
-
-    private var imageMessage: String {
-        isLoading ? "読み込み中" : "画像未選択"
-    }
-
-    private var depthMessage: String {
-        isLoading ? "深度推定中" : "推定結果なし"
-    }
-
-    private var layerMessage: String {
-        isLoading ? "レイヤ生成中" : "レイヤ結果なし"
-    }
-
-    private var cutoutMessage: String {
-        isLoading ? "切り抜き生成中" : "表示中の切り抜きレイヤなし"
-    }
-
-    @ViewBuilder
-    private func imageView(_ image: NSImage?, placeholderSystemImage: String, message: String) -> some View {
-        if let image {
-            Image(platformImage: image)
-                .resizable()
-                .scaledToFit()
-                .padding(14)
-        } else {
-            placeholder(systemImageName: placeholderSystemImage, message: message)
         }
     }
 
@@ -112,5 +89,21 @@ struct DepthPreviewCanvas: View {
                 .foregroundStyle(.secondary)
         }
         .padding(20)
+    }
+
+    private func paddedSize(for imageSize: CGSize) -> CGSize {
+        CGSize(
+            width: imageSize.width + imagePadding * 2,
+            height: imageSize.height + imagePadding * 2
+        )
+    }
+
+    private func maximumImageSize(in images: [NSImage]) -> CGSize {
+        images.reduce(.zero) { result, image in
+            CGSize(
+                width: max(result.width, image.size.width),
+                height: max(result.height, image.size.height)
+            )
+        }
     }
 }

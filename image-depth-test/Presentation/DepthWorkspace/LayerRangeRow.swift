@@ -8,10 +8,8 @@ import SwiftUI
 struct LayerRangeRow: View {
     let layer: DepthLayerDefinition
     let isSelected: Bool
-    let isVisible: Bool
     let canDelete: Bool
     let action: () -> Void
-    let visibilityAction: () -> Void
     let deleteAction: () -> Void
 
     var body: some View {
@@ -20,7 +18,6 @@ struct LayerRangeRow: View {
                 RoundedRectangle(cornerRadius: 3)
                     .fill(layer.color)
                     .frame(width: 18, height: 18)
-                    .opacity(isVisible ? 1 : 0.35)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(layer.name)
@@ -30,7 +27,6 @@ struct LayerRangeRow: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                .opacity(isVisible ? 1 : 0.48)
 
                 Spacer()
 
@@ -38,14 +34,6 @@ struct LayerRangeRow: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.tint)
                 }
-
-                Button(action: visibilityAction) {
-                    Image(systemName: isVisible ? "eye" : "eye.slash")
-                        .frame(width: 22, height: 22)
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(isVisible ? .secondary : .tertiary)
-                .help(isVisible ? "切り抜きレイヤを非表示" : "切り抜きレイヤを表示")
 
                 Button(role: .destructive, action: deleteAction) {
                     Image(systemName: "trash")

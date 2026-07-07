@@ -12,20 +12,21 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @State private var viewModel: ImageDepthViewModel
     @State private var isFileImporterPresented = false
-    @State private var previewMode: DepthPreviewMode = .overlay
     @State private var layerItems: [DepthLayerItem]
     @State private var selectedLayerID: DepthLayerItem.ID
+    @State private var visiblePreviewTargets: Set<PreviewDisplayTarget>
     @State private var boundaries = [0.22, 0.48, 0.74]
-    @State private var overlayOpacity = 0.56
-    @State private var visibleLayerIDs: Set<DepthLayerItem.ID>
     @State private var layerRenderingTask: Task<Void, Never>?
+
+    private let overlayOpacity = 0.56
 
     init(depthEstimator: any DepthEstimating) {
         let initialLayerItems = DepthLayerItem.initialItems
         _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
+        let initialSelectedLayerID = initialLayerItems.last?.id ?? UUID()
         _layerItems = State(initialValue: initialLayerItems)
-        _selectedLayerID = State(initialValue: initialLayerItems.last?.id ?? UUID())
-        _visibleLayerIDs = State(initialValue: Set(initialLayerItems.map(\.id)))
+        _selectedLayerID = State(initialValue: initialSelectedLayerID)
+        _visiblePreviewTargets = State(initialValue: Set([.original] + initialLayerItems.map { .layer($0.id) }))
     }
 
     var body: some View {
@@ -55,9 +56,6 @@ struct ContentView: View {
             }
         }
         .onChange(of: boundaries) { _, _ in
-            scheduleLayerRenderingUpdate()
-        }
-        .onChange(of: overlayOpacity) { _, _ in
             scheduleLayerRenderingUpdate()
         }
     }
@@ -124,30 +122,14 @@ struct ContentView: View {
 
     private var previewWorkspace: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 12) {
-                Text("プレビュー")
-                    .font(.headline)
-
-                Picker("表示", selection: $previewMode) {
-                    ForEach(DepthPreviewMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.systemImageName)
-                            .tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 520)
-
-                Spacer()
-            }
+            Text("プレビュー")
+                .font(.headline)
 
             DepthPreviewCanvas(
-                mode: previewMode,
-                inputImage: viewModel.inputImage,
-                depthImage: viewModel.depthImage,
-                layerPreviewImage: viewModel.layerPreviewImage,
-                layerOverlayImage: viewModel.layerOverlayImage,
-                cutoutImages: visibleLayerCutoutImages,
+                layers: visiblePreviewLayers,
+                workspaceID: previewWorkspaceID,
+                placeholderSystemImage: visiblePreviewPlaceholderSystemImage,
+                placeholderMessage: visiblePreviewPlaceholderMessage,
                 isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings,
                 selectedLayer: layerDefinitions[safe: selectedLayerIndex]
             )
@@ -174,19 +156,6 @@ struct ContentView: View {
                 Label("分割して追加", systemImage: "plus.rectangle.on.rectangle")
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("オーバーレイ")
-                    .font(.subheadline.weight(.semibold))
-                HStack {
-                    Image(systemName: "circle.lefthalf.filled")
-                    Slider(value: $overlayOpacity, in: 0.2...0.85)
-                    Text(overlayOpacity, format: .percent.precision(.fractionLength(0)))
-                        .monospacedDigit()
-                        .frame(width: 44, alignment: .trailing)
-                }
-                .foregroundStyle(.secondary)
-            }
-
             Divider()
 
             VStack(alignment: .leading, spacing: 10) {
@@ -210,24 +179,109 @@ struct ContentView: View {
                     LayerRangeRow(
                         layer: layer,
                         isSelected: layer.id == selectedLayerID,
-                        isVisible: visibleLayerIDs.contains(layer.id),
                         canDelete: layerItems.count > 2
                     ) {
                         selectedLayerID = layer.id
-                    } visibilityAction: {
-                        toggleLayerVisibility(layer.id)
                     } deleteAction: {
                         deleteLayer(id: layer.id)
                     }
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 12)
+
+            displayControlPane
         }
         .padding(16)
         .frame(width: 300)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var displayControlPane: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("表示")
+                .font(.subheadline.weight(.semibold))
+
+            ForEach(layerDefinitions.reversed()) { layer in
+                let target = PreviewDisplayTarget.layer(layer.id)
+                previewTargetButton(
+                    title: layer.name,
+                    systemImageName: "scope",
+                    tint: layer.color,
+                    isVisible: visiblePreviewTargets.contains(target),
+                    isAvailable: viewModel.layerCutoutImages.indices.contains(layer.index)
+                ) {
+                    togglePreviewTarget(target)
+                }
+            }
+
+            previewTargetButton(
+                title: "深度マップ",
+                systemImageName: "square.stack.3d.down.right",
+                isVisible: visiblePreviewTargets.contains(.depthMap),
+                isAvailable: viewModel.depthImage != nil
+            ) {
+                togglePreviewTarget(.depthMap)
+            }
+
+            previewTargetButton(
+                title: "元画像",
+                systemImageName: "photo",
+                isVisible: visiblePreviewTargets.contains(.original),
+                isAvailable: viewModel.inputImage != nil
+            ) {
+                togglePreviewTarget(.original)
+            }
+        }
+        .padding(12)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func previewTargetButton(
+        title: String,
+        systemImageName: String,
+        tint: Color? = nil,
+        isVisible: Bool,
+        isAvailable: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: systemImageName)
+                    .frame(width: 18)
+                    .foregroundStyle(tint ?? .secondary)
+
+                Text(title)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer()
+
+                if isVisible {
+                    Image(systemName: "eye.fill")
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.tint)
+                } else {
+                    Image(systemName: "eye.slash")
+                        .frame(width: 22, height: 22)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .opacity(isAvailable ? 1 : 0.45)
+            .background(isVisible ? Color.accentColor.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isVisible ? Color.accentColor.opacity(0.30) : Color.secondary.opacity(0.14), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(!isAvailable)
+        .help(isVisible ? "非表示にする" : "表示する")
     }
 
     private var layerDefinitions: [DepthLayerDefinition] {
@@ -255,11 +309,52 @@ struct ContentView: View {
         layerItems.firstIndex { $0.id == selectedLayerID } ?? 0
     }
 
-    private var visibleLayerCutoutImages: [NSImage] {
-        layerDefinitions.enumerated().compactMap { index, layer in
-            guard visibleLayerIDs.contains(layer.id) else { return nil }
-            return viewModel.layerCutoutImages[safe: index]
+    private var visiblePreviewLayers: [DepthPreviewCanvasLayer] {
+        var layers: [DepthPreviewCanvasLayer] = []
+
+        if visiblePreviewTargets.contains(.original), let inputImage = viewModel.inputImage {
+            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.original, image: inputImage))
         }
+
+        if visiblePreviewTargets.contains(.depthMap), let depthImage = viewModel.depthImage {
+            layers.append(DepthPreviewCanvasLayer(id: PreviewDisplayTarget.depthMap, image: depthImage))
+        }
+
+        for layer in layerDefinitions {
+            let target = PreviewDisplayTarget.layer(layer.id)
+            guard visiblePreviewTargets.contains(target),
+                  let image = viewModel.layerCutoutImages[safe: layer.index] else {
+                continue
+            }
+
+            layers.append(DepthPreviewCanvasLayer(id: target, image: image))
+        }
+
+        return layers
+    }
+
+    private var visiblePreviewPlaceholderSystemImage: String {
+        if visiblePreviewTargets.isEmpty { return "eye.slash" }
+        if visiblePreviewTargets.contains(.depthMap) { return "square.stack.3d.down.right" }
+        if visiblePreviewTargets.contains(.original) { return "photo" }
+        return "scope"
+    }
+
+    private var visiblePreviewPlaceholderMessage: String {
+        if viewModel.isLoadingImage { return "読み込み中" }
+        if viewModel.isEstimatingDepth { return "深度推定中" }
+        if viewModel.isGeneratingLayerRenderings { return "レイヤ生成中" }
+        if visiblePreviewTargets.isEmpty { return "表示中の項目なし" }
+        if viewModel.inputImage == nil { return "画像未選択" }
+        return "表示できる画像がありません"
+    }
+
+    private var previewWorkspaceID: AnyHashable {
+        if let inputImage = viewModel.inputImage {
+            return ObjectIdentifier(inputImage)
+        }
+
+        return "empty-preview-workspace"
     }
 
     private func autoSplitDepthRanges() async {
@@ -310,7 +405,7 @@ struct ContentView: View {
         layerItems.insert(insertedItem, at: index + 1)
         boundaries.insert(splitBoundary, at: index)
         selectedLayerID = insertedItem.id
-        visibleLayerIDs.insert(insertedItem.id)
+        visiblePreviewTargets.insert(.layer(insertedItem.id))
         scheduleLayerRenderingUpdate()
     }
 
@@ -321,7 +416,7 @@ struct ContentView: View {
         }
 
         let removedItem = layerItems.remove(at: index)
-        visibleLayerIDs.remove(removedItem.id)
+        visiblePreviewTargets.remove(.layer(removedItem.id))
 
         if boundaries.indices.contains(index) {
             boundaries.remove(at: index)
@@ -331,7 +426,6 @@ struct ContentView: View {
 
         let nextIndex = min(index, layerItems.count - 1)
         selectedLayerID = layerItems[nextIndex].id
-        syncVisibleLayers()
         scheduleLayerRenderingUpdate()
     }
 
@@ -384,23 +478,12 @@ struct ContentView: View {
         selectedLayerID = layerItems.last?.id ?? selectedLayerID
     }
 
-    private func syncVisibleLayers() {
-        let activeIDs = Set(layerItems.map(\.id))
-        visibleLayerIDs = visibleLayerIDs.intersection(activeIDs)
-
-        if visibleLayerIDs.isEmpty, let selectedItem = layerItems[safe: selectedLayerIndex] {
-            visibleLayerIDs.insert(selectedItem.id)
-        }
-    }
-
-    private func toggleLayerVisibility(_ id: DepthLayerItem.ID) {
-        if visibleLayerIDs.contains(id) {
-            visibleLayerIDs.remove(id)
+    private func togglePreviewTarget(_ target: PreviewDisplayTarget) {
+        if visiblePreviewTargets.contains(target) {
+            visiblePreviewTargets.remove(target)
         } else {
-            visibleLayerIDs.insert(id)
+            visiblePreviewTargets.insert(target)
         }
-
-        previewMode = .isolated
     }
 
     private func sanitized(_ boundaries: [Double], expectedCount: Int) -> [Double] {
@@ -420,6 +503,12 @@ struct ContentView: View {
 
         return sanitizedBoundaries
     }
+}
+
+private enum PreviewDisplayTarget: Hashable {
+    case original
+    case depthMap
+    case layer(UUID)
 }
 
 private struct PreviewDepthEstimator: DepthEstimating {
