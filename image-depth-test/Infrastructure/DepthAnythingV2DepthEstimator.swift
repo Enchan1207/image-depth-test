@@ -25,7 +25,7 @@ final class DepthAnythingV2DepthEstimator: DepthEstimating, @unchecked Sendable 
         inputHeight = imageConstraint.pixelsHigh
     }
 
-    func estimateDepth(for image: CGImage) async throws -> CGImage {
+    func estimateDepth(for image: CGImage) async throws -> DepthEstimationResult {
         try await Task.detached(priority: .userInitiated) { [model, inputWidth, inputHeight, ciContext] in
             let inputPixelBuffer = try Self.makePixelBuffer(
                 from: image,
@@ -49,12 +49,22 @@ final class DepthAnythingV2DepthEstimator: DepthEstimating, @unchecked Sendable 
                 )
             )
             let outputRect = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+            let resizedDepthPixelBuffer = try Self.makeDepthPixelBuffer(width: image.width, height: image.height)
+            ciContext.render(
+                resizedDepthImage,
+                to: resizedDepthPixelBuffer,
+                bounds: outputRect,
+                colorSpace: nil
+            )
 
             guard let cgImage = ciContext.createCGImage(resizedDepthImage, from: outputRect) else {
                 throw DepthEstimationError.depthImageConversionFailed
             }
 
-            return cgImage
+            return DepthEstimationResult(
+                depthImage: cgImage,
+                depthPixelBuffer: resizedDepthPixelBuffer
+            )
         }.value
     }
 
@@ -105,6 +115,31 @@ final class DepthAnythingV2DepthEstimator: DepthEstimating, @unchecked Sendable 
 
         return pixelBuffer
     }
+
+    nonisolated private static func makeDepthPixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
+        let attributes: CFDictionary = [
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:]
+        ] as CFDictionary
+
+        var pixelBuffer: CVPixelBuffer?
+        let status = CVPixelBufferCreate(
+            kCFAllocatorDefault,
+            width,
+            height,
+            kCVPixelFormatType_OneComponent32Float,
+            attributes,
+            &pixelBuffer
+        )
+
+        guard status == kCVReturnSuccess, let pixelBuffer else {
+            throw DepthEstimationError.depthPixelBufferCreationFailed
+        }
+
+        return pixelBuffer
+    }
 }
 
 private enum FeatureName {
@@ -115,6 +150,7 @@ private enum FeatureName {
 enum DepthEstimationError: Error {
     case missingInputImageConstraint
     case inputPixelBufferCreationFailed
+    case depthPixelBufferCreationFailed
     case missingDepthOutput
     case depthImageConversionFailed
 }

@@ -97,12 +97,12 @@ enum DepthLayerMasking {
         return try apply(mask: mask, to: image)
     }
 
-    nonisolated static func makeLayerRenderings(
+    nonisolated static func makePreviewRenderings(
         from image: CGImage,
         depthImage: CGImage,
         layers: [DepthLayerRenderSpec],
         overlayOpacity: Double
-    ) throws -> DepthLayerRenderingResult {
+    ) throws -> DepthLayerPreviewRenderingResult {
         guard !layers.isEmpty else {
             throw DepthLayerMaskingError.missingLayerDefinitions
         }
@@ -115,25 +115,62 @@ enum DepthLayerMasking {
         let pixelCount = width * height
         var layerPreviewPixels = [UInt8](repeating: 0, count: pixelCount * Constants.rgbaBytesPerPixel)
         var overlayPreviewPixels = basePixels
+
+        for pixelIndex in 0..<pixelCount {
+            let depthValue = depthSamples.values[pixelIndex]
+            guard let selectedLayerIndex = layerIndex(for: depthValue, in: layers) else {
+                continue
+            }
+
+            let rgbaIndex = pixelIndex * Constants.rgbaBytesPerPixel
+            let color = layers[selectedLayerIndex].color
+            layerPreviewPixels[rgbaIndex] = color.red
+            layerPreviewPixels[rgbaIndex + 1] = color.green
+            layerPreviewPixels[rgbaIndex + 2] = color.blue
+            layerPreviewPixels[rgbaIndex + 3] = 255
+
+            overlayPreviewPixels[rgbaIndex] = blend(base: basePixels[rgbaIndex], overlay: color.red, opacity: clampedOpacity)
+            overlayPreviewPixels[rgbaIndex + 1] = blend(base: basePixels[rgbaIndex + 1], overlay: color.green, opacity: clampedOpacity)
+            overlayPreviewPixels[rgbaIndex + 2] = blend(base: basePixels[rgbaIndex + 2], overlay: color.blue, opacity: clampedOpacity)
+            overlayPreviewPixels[rgbaIndex + 3] = basePixels[rgbaIndex + 3]
+        }
+
+        return DepthLayerPreviewRenderingResult(
+            layerPreview: try makeRGBAImage(
+                pixels: layerPreviewPixels,
+                width: width,
+                height: height,
+                shouldInterpolate: false
+            ),
+            overlayPreview: try makeRGBAImage(
+                pixels: overlayPreviewPixels,
+                width: width,
+                height: height,
+                shouldInterpolate: true
+            )
+        )
+    }
+
+    nonisolated static func makeCutouts(
+        from image: CGImage,
+        depthImage: CGImage,
+        layers: [DepthLayerRenderSpec]
+    ) throws -> [CGImage] {
+        guard !layers.isEmpty else {
+            throw DepthLayerMaskingError.missingLayerDefinitions
+        }
+
+        let width = image.width
+        let height = image.height
+        let depthSamples = try makeDepthSamples(from: depthImage, width: width, height: height)
+        let basePixels = try makeRGBAPixels(from: image, width: width, height: height)
+        let pixelCount = width * height
         var cutoutPixelsByLayer = layers.map { _ in basePixels }
 
         for pixelIndex in 0..<pixelCount {
             let depthValue = depthSamples.values[pixelIndex]
             let selectedLayerIndex = layerIndex(for: depthValue, in: layers)
             let rgbaIndex = pixelIndex * Constants.rgbaBytesPerPixel
-
-            if let selectedLayerIndex {
-                let color = layers[selectedLayerIndex].color
-                layerPreviewPixels[rgbaIndex] = color.red
-                layerPreviewPixels[rgbaIndex + 1] = color.green
-                layerPreviewPixels[rgbaIndex + 2] = color.blue
-                layerPreviewPixels[rgbaIndex + 3] = 255
-
-                overlayPreviewPixels[rgbaIndex] = blend(base: basePixels[rgbaIndex], overlay: color.red, opacity: clampedOpacity)
-                overlayPreviewPixels[rgbaIndex + 1] = blend(base: basePixels[rgbaIndex + 1], overlay: color.green, opacity: clampedOpacity)
-                overlayPreviewPixels[rgbaIndex + 2] = blend(base: basePixels[rgbaIndex + 2], overlay: color.blue, opacity: clampedOpacity)
-                overlayPreviewPixels[rgbaIndex + 3] = basePixels[rgbaIndex + 3]
-            }
 
             for layerPosition in layers.indices where layerPosition != selectedLayerIndex {
                 cutoutPixelsByLayer[layerPosition][rgbaIndex] = 0
@@ -143,25 +180,28 @@ enum DepthLayerMasking {
             }
         }
 
-        let layerPreview = try makeRGBAImage(
-            pixels: layerPreviewPixels,
-            width: width,
-            height: height,
-            shouldInterpolate: false
-        )
-        let overlayPreview = try makeRGBAImage(
-            pixels: overlayPreviewPixels,
-            width: width,
-            height: height,
-            shouldInterpolate: true
-        )
-        let cutouts = try cutoutPixelsByLayer.map { pixels in
+        return try cutoutPixelsByLayer.map { pixels in
             try makeRGBAImage(pixels: pixels, width: width, height: height, shouldInterpolate: true)
         }
+    }
+
+    nonisolated static func makeLayerRenderings(
+        from image: CGImage,
+        depthImage: CGImage,
+        layers: [DepthLayerRenderSpec],
+        overlayOpacity: Double
+    ) throws -> DepthLayerRenderingResult {
+        let previews = try makePreviewRenderings(
+            from: image,
+            depthImage: depthImage,
+            layers: layers,
+            overlayOpacity: overlayOpacity
+        )
+        let cutouts = try makeCutouts(from: image, depthImage: depthImage, layers: layers)
 
         return DepthLayerRenderingResult(
-            layerPreview: layerPreview,
-            overlayPreview: overlayPreview,
+            layerPreview: previews.layerPreview,
+            overlayPreview: previews.overlayPreview,
             cutouts: cutouts
         )
     }

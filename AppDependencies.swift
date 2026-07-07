@@ -14,10 +14,18 @@ enum AppDependencies {
             return UnavailableDepthEstimator()
         }
     }
+
+    static func makeDepthLayerRenderer() -> any DepthLayerRendering {
+        do {
+            return try MetalDepthLayerRenderer()
+        } catch {
+            return CPUDepthLayerRenderer()
+        }
+    }
 }
 
 private struct UnavailableDepthEstimator: DepthEstimating {
-    func estimateDepth(for image: CGImage) async throws -> CGImage {
+    func estimateDepth(for image: CGImage) async throws -> DepthEstimationResult {
         throw DepthEstimatorUnavailableError()
     }
 }

@@ -11,7 +11,10 @@ import SwiftUI
 struct image_depth_testApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView(depthEstimator: AppDependencies.makeDepthEstimator())
+            ContentView(
+                depthEstimator: AppDependencies.makeDepthEstimator(),
+                layerRenderer: AppDependencies.makeDepthLayerRenderer()
+            )
         }
     }
 }

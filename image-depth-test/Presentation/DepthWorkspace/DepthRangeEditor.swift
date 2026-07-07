@@ -9,6 +9,7 @@ struct DepthRangeEditor: View {
     let layers: [DepthLayerDefinition]
     @Binding var boundaries: [Double]
     @Binding var selectedLayerID: DepthLayerItem.ID
+    var onEditingChanged: (Bool) -> Void = { _ in }
 
     private let handleWidth: CGFloat = 14
 
@@ -52,10 +53,14 @@ struct DepthRangeEditor: View {
                             .gesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
+                                        onEditingChanged(true)
                                         if let layer = layers[safe: min(index + 1, layers.count - 1)] {
                                             selectedLayerID = layer.id
                                         }
                                         updateBoundary(index, locationX: value.location.x, width: width)
+                                    }
+                                    .onEnded { _ in
+                                        onEditingChanged(false)
                                     }
                             )
                     }

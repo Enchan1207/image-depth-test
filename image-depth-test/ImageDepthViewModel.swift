@@ -4,6 +4,7 @@
 //
 
 import AppKit
+import CoreVideo
 import Foundation
 import Observation
 
@@ -11,8 +12,10 @@ import Observation
 @Observable
 final class ImageDepthViewModel {
     @ObservationIgnored private let depthEstimator: any DepthEstimating
+    @ObservationIgnored private let layerRenderer: any DepthLayerRendering
     @ObservationIgnored private var inputCGImage: CGImage?
     @ObservationIgnored private var depthCGImage: CGImage?
+    @ObservationIgnored private var depthPixelBuffer: CVPixelBuffer?
 
     private(set) var selectedFileName: String?
     private(set) var inputImage: NSImage?
@@ -33,8 +36,9 @@ final class ImageDepthViewModel {
         inputCGImage != nil && depthCGImage != nil
     }
 
-    init(depthEstimator: any DepthEstimating) {
+    init(depthEstimator: any DepthEstimating, layerRenderer: any DepthLayerRendering) {
         self.depthEstimator = depthEstimator
+        self.layerRenderer = layerRenderer
     }
 
     func loadImage(from url: URL?) async {
@@ -75,9 +79,10 @@ final class ImageDepthViewModel {
         isEstimatingDepth = true
 
         do {
-            let depthCGImage = try await depthEstimator.estimateDepth(for: cgImage)
-            self.depthCGImage = depthCGImage
-            depthImage = Self.makePlatformImage(from: depthCGImage)
+            let result = try await depthEstimator.estimateDepth(for: cgImage)
+            self.depthCGImage = result.depthImage
+            self.depthPixelBuffer = result.depthPixelBuffer
+            depthImage = Self.makePlatformImage(from: result.depthImage)
         } catch {
             errorMessage = "深度推定に失敗しました"
         }
@@ -94,10 +99,13 @@ final class ImageDepthViewModel {
         isGeneratingLayerRenderings = true
 
         do {
+            let renderer = layerRenderer
+            let depthPixelBuffer = depthPixelBuffer
             let result = try await Task.detached(priority: .userInitiated) {
-                try DepthLayerMasking.makeLayerRenderings(
+                try renderer.makeLayerRenderings(
                     from: inputCGImage,
                     depthImage: depthCGImage,
+                    depthPixelBuffer: depthPixelBuffer,
                     layers: layers,
                     overlayOpacity: overlayOpacity
                 )
@@ -110,6 +118,39 @@ final class ImageDepthViewModel {
         } catch {
             clearLayerRenderings()
             errorMessage = "レイヤ画像の生成に失敗しました"
+        }
+
+        isGeneratingLayerRenderings = false
+    }
+
+    func generateLayerPreviews(layers: [DepthLayerRenderSpec], overlayOpacity: Double) async {
+        guard let inputCGImage, let depthCGImage else {
+            clearLayerRenderings()
+            return
+        }
+
+        isGeneratingLayerRenderings = true
+
+        do {
+            let renderer = layerRenderer
+            let depthPixelBuffer = depthPixelBuffer
+            let result = try await Task.detached(priority: .userInitiated) {
+                try renderer.makePreviewRenderings(
+                    from: inputCGImage,
+                    depthImage: depthCGImage,
+                    depthPixelBuffer: depthPixelBuffer,
+                    layers: layers,
+                    overlayOpacity: overlayOpacity
+                )
+            }.value
+
+            layerPreviewImage = Self.makePlatformImage(from: result.layerPreview)
+            layerOverlayImage = Self.makePlatformImage(from: result.overlayPreview)
+            errorMessage = nil
+        } catch {
+            layerPreviewImage = nil
+            layerOverlayImage = nil
+            errorMessage = "レイヤプレビューの生成に失敗しました"
         }
 
         isGeneratingLayerRenderings = false
@@ -149,6 +190,7 @@ final class ImageDepthViewModel {
     private func clearDepthOutputs() {
         depthImage = nil
         depthCGImage = nil
+        depthPixelBuffer = nil
         clearLayerRenderings()
     }
 

@@ -17,12 +17,13 @@ struct ContentView: View {
     @State private var visiblePreviewTargets: Set<PreviewDisplayTarget>
     @State private var boundaries = [0.22, 0.48, 0.74]
     @State private var layerRenderingTask: Task<Void, Never>?
+    @State private var isEditingDepthRange = false
 
     private let overlayOpacity = 0.56
 
-    init(depthEstimator: any DepthEstimating) {
+    init(depthEstimator: any DepthEstimating, layerRenderer: any DepthLayerRendering) {
         let initialLayerItems = DepthLayerItem.initialItems
-        _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator))
+        _viewModel = State(initialValue: ImageDepthViewModel(depthEstimator: depthEstimator, layerRenderer: layerRenderer))
         let initialSelectedLayerID = initialLayerItems.last?.id ?? UUID()
         _layerItems = State(initialValue: initialLayerItems)
         _selectedLayerID = State(initialValue: initialSelectedLayerID)
@@ -56,7 +57,7 @@ struct ContentView: View {
             }
         }
         .onChange(of: boundaries) { _, _ in
-            scheduleLayerRenderingUpdate()
+            scheduleLayerRenderingUpdate(includeCutouts: !isEditingDepthRange)
         }
     }
 
@@ -138,7 +139,9 @@ struct ContentView: View {
                 layers: layerDefinitions,
                 boundaries: $boundaries,
                 selectedLayerID: $selectedLayerID
-            )
+            ) { isEditing in
+                handleDepthRangeEditingChanged(isEditing)
+            }
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -370,15 +373,26 @@ struct ContentView: View {
     private func resetDepthRanges() {
         boundaries = defaultBoundaries(for: layerItems.count)
         selectedLayerID = layerItems[min(layerItems.count - 1, selectedLayerIndex)].id
-        scheduleLayerRenderingUpdate()
+        scheduleLayerRenderingUpdate(includeCutouts: true)
     }
 
-    private func scheduleLayerRenderingUpdate() {
+    private func scheduleLayerRenderingUpdate(includeCutouts: Bool) {
         layerRenderingTask?.cancel()
         layerRenderingTask = Task {
             try? await Task.sleep(for: .milliseconds(220))
             guard !Task.isCancelled else { return }
-            await generateLayerRenderings()
+            if includeCutouts {
+                await generateLayerRenderings()
+            } else {
+                await generateLayerPreviews()
+            }
+        }
+    }
+
+    private func handleDepthRangeEditingChanged(_ isEditing: Bool) {
+        isEditingDepthRange = isEditing
+        if !isEditing {
+            scheduleLayerRenderingUpdate(includeCutouts: true)
         }
     }
 
@@ -387,6 +401,16 @@ struct ContentView: View {
         guard specs.count == layerItems.count else { return }
 
         await viewModel.generateLayerRenderings(
+            layers: specs,
+            overlayOpacity: overlayOpacity
+        )
+    }
+
+    private func generateLayerPreviews() async {
+        let specs = layerRenderSpecs
+        guard specs.count == layerItems.count else { return }
+
+        await viewModel.generateLayerPreviews(
             layers: specs,
             overlayOpacity: overlayOpacity
         )
@@ -406,7 +430,7 @@ struct ContentView: View {
         boundaries.insert(splitBoundary, at: index)
         selectedLayerID = insertedItem.id
         visiblePreviewTargets.insert(.layer(insertedItem.id))
-        scheduleLayerRenderingUpdate()
+        scheduleLayerRenderingUpdate(includeCutouts: true)
     }
 
     private func deleteLayer(id: DepthLayerItem.ID) {
@@ -426,7 +450,7 @@ struct ContentView: View {
 
         let nextIndex = min(index, layerItems.count - 1)
         selectedLayerID = layerItems[nextIndex].id
-        scheduleLayerRenderingUpdate()
+        scheduleLayerRenderingUpdate(includeCutouts: true)
     }
 
     private func setActiveBoundaries(_ activeBoundaries: [Double]) {
@@ -512,7 +536,7 @@ private enum PreviewDisplayTarget: Hashable {
 }
 
 private struct PreviewDepthEstimator: DepthEstimating {
-    func estimateDepth(for image: CGImage) async throws -> CGImage {
+    func estimateDepth(for image: CGImage) async throws -> DepthEstimationResult {
         throw PreviewDepthEstimationError()
     }
 }
@@ -520,5 +544,5 @@ private struct PreviewDepthEstimator: DepthEstimating {
 private struct PreviewDepthEstimationError: Error {}
 
 #Preview {
-    ContentView(depthEstimator: PreviewDepthEstimator())
+    ContentView(depthEstimator: PreviewDepthEstimator(), layerRenderer: CPUDepthLayerRenderer())
 }
