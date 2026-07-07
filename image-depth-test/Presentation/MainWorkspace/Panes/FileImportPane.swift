@@ -9,6 +9,7 @@ struct FileImportPane: View {
     let viewModel: ImageDepthViewModel
     let importImageAction: () -> Void
     let reestimateAction: () -> Void
+    let exportAction: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -20,6 +21,11 @@ struct FileImportPane: View {
             statusView
 
             Spacer()
+
+            Button(action: exportAction) {
+                Label("エクスポート", systemImage: "square.and.arrow.up")
+            }
+            .disabled(viewModel.layerCutoutImages.isEmpty || viewModel.isGeneratingLayerRenderings)
 
             Button(action: reestimateAction) {
                 Label("再推定", systemImage: "arrow.triangle.2.circlepath")

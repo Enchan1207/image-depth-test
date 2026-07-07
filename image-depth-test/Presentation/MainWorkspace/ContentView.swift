@@ -22,6 +22,7 @@ struct ContentView: View {
     @State private var isRevertingDepthBoundaryChange = false
     @State private var editedMasksByLayerID: [UUID: CGImage] = [:]
     @State private var maskEditorRegistry = MaskEditorWindowRegistry()
+    @State private var exportWindowRegistry = ImageExportWindowRegistry()
 
     private let overlayOpacity = 0.56
 
@@ -39,7 +40,8 @@ struct ContentView: View {
             FileImportPane(
                 viewModel: viewModel,
                 importImageAction: presentImageImporter,
-                reestimateAction: reestimateDepthForSelectedImage
+                reestimateAction: reestimateDepthForSelectedImage,
+                exportAction: openExportWindow
             )
 
             HStack(alignment: .top, spacing: 14) {
@@ -358,6 +360,31 @@ struct ContentView: View {
 
     private func canEditMask(for layer: DepthLayerDefinition) -> Bool {
         viewModel.canEditLayerMasks && layer.renderSpec != nil
+    }
+
+    private func openExportWindow() {
+        let cutoutImages = viewModel.layerCutoutCGImagesForExport()
+        let exportLayers = layerDefinitions.compactMap { layer -> ExportLayerSelection? in
+            guard let image = cutoutImages[safe: layer.index] else { return nil }
+            return ExportLayerSelection(layer: layer, image: image)
+        }
+
+        guard !exportLayers.isEmpty else { return }
+
+        exportWindowRegistry.openExportWindow(
+            layers: exportLayers,
+            suggestedFileName: suggestedExportFileName
+        )
+    }
+
+    private var suggestedExportFileName: String {
+        guard let selectedFileName = viewModel.selectedFileName,
+              !selectedFileName.isEmpty else {
+            return "depth-layers.png"
+        }
+
+        let baseName = (selectedFileName as NSString).deletingPathExtension
+        return "\(baseName)-layers.png"
     }
 
     private func openMaskEditor(for layer: DepthLayerDefinition) async {

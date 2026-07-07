@@ -23,6 +23,7 @@ final class ImageDepthViewModel {
     private(set) var layerPreviewImage: NSImage?
     private(set) var layerOverlayImage: NSImage?
     private(set) var layerCutoutImages: [NSImage] = []
+    @ObservationIgnored private var layerCutoutCGImages: [CGImage] = []
     private(set) var isLoadingImage = false
     private(set) var isEstimatingDepth = false
     private(set) var isGeneratingLayerRenderings = false
@@ -111,6 +112,10 @@ final class ImageDepthViewModel {
         inputCGImage
     }
 
+    func layerCutoutCGImagesForExport() -> [CGImage] {
+        layerCutoutCGImages
+    }
+
     func generateLayerRenderings(
         layers: [DepthLayerRenderSpec],
         overlayOpacity: Double,
@@ -160,6 +165,7 @@ final class ImageDepthViewModel {
 
             layerPreviewImage = Self.makeNSImage(from: result.layerPreview)
             layerOverlayImage = Self.makeNSImage(from: result.overlayPreview)
+            layerCutoutCGImages = result.cutouts
             layerCutoutImages = result.cutouts.map(Self.makeNSImage)
             errorMessage = nil
         } catch {
@@ -244,6 +250,7 @@ final class ImageDepthViewModel {
     private func clearLayerRenderings() {
         layerPreviewImage = nil
         layerOverlayImage = nil
+        layerCutoutCGImages = []
         layerCutoutImages = []
     }
 
