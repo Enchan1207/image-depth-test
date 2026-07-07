@@ -54,7 +54,7 @@ final class ImageDepthViewModel {
         isLoadingImage = true
 
         do {
-            let image = try await Self.loadPlatformImage(from: url)
+            let image = try await Self.loadNSImage(from: url)
             inputImage = image
             inputCGImage = image.cgImageForInference()
         } catch {
@@ -86,7 +86,7 @@ final class ImageDepthViewModel {
             let result = try await depthEstimator.estimateDepth(for: cgImage)
             self.depthCGImage = result.depthImage
             self.depthPixelBuffer = result.depthPixelBuffer
-            depthImage = Self.makePlatformImage(from: result.depthImage)
+            depthImage = Self.makeNSImage(from: result.depthImage)
         } catch {
             errorMessage = "深度推定に失敗しました"
         }
@@ -158,9 +158,9 @@ final class ImageDepthViewModel {
                 return result
             }.value
 
-            layerPreviewImage = Self.makePlatformImage(from: result.layerPreview)
-            layerOverlayImage = Self.makePlatformImage(from: result.overlayPreview)
-            layerCutoutImages = result.cutouts.map(Self.makePlatformImage)
+            layerPreviewImage = Self.makeNSImage(from: result.layerPreview)
+            layerOverlayImage = Self.makeNSImage(from: result.overlayPreview)
+            layerCutoutImages = result.cutouts.map(Self.makeNSImage)
             errorMessage = nil
         } catch {
             clearLayerRenderings()
@@ -191,8 +191,8 @@ final class ImageDepthViewModel {
                 )
             }.value
 
-            layerPreviewImage = Self.makePlatformImage(from: result.layerPreview)
-            layerOverlayImage = Self.makePlatformImage(from: result.overlayPreview)
+            layerPreviewImage = Self.makeNSImage(from: result.layerPreview)
+            layerOverlayImage = Self.makeNSImage(from: result.overlayPreview)
             errorMessage = nil
         } catch {
             layerPreviewImage = nil
@@ -247,7 +247,7 @@ final class ImageDepthViewModel {
         layerCutoutImages = []
     }
 
-    private static func loadPlatformImage(from url: URL) async throws -> NSImage {
+    private static func loadNSImage(from url: URL) async throws -> NSImage {
         try await Task.detached(priority: .userInitiated) {
             let canAccessResource = url.startAccessingSecurityScopedResource()
             defer {
@@ -265,7 +265,7 @@ final class ImageDepthViewModel {
         }.value
     }
 
-    private static func makePlatformImage(from cgImage: CGImage) -> NSImage {
+    private static func makeNSImage(from cgImage: CGImage) -> NSImage {
         NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)

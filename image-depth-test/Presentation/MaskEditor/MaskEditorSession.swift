@@ -43,15 +43,15 @@ final class MaskEditorSession {
         self.baseMask = initialMask
         self.onSave = onSave
         self.imageSize = CGSize(width: inputImage.width, height: inputImage.height)
-        self.baseMaskImage = Self.makePlatformImage(from: initialMask)
-        self.originalImage = Self.makePlatformImage(from: inputImage)
+        self.baseMaskImage = Self.makeNSImage(from: initialMask)
+        self.originalImage = Self.makeNSImage(from: inputImage)
         self.currentMask = initialMask
-        self.currentMaskImage = Self.makePlatformImage(from: initialMask)
+        self.currentMaskImage = Self.makeNSImage(from: initialMask)
 
         if let preview = try? DepthLayerMasking.apply(mask: initialMask, to: inputImage) {
-            self.maskedPreviewImage = Self.makePlatformImage(from: preview)
+            self.maskedPreviewImage = Self.makeNSImage(from: preview)
         } else {
-            self.maskedPreviewImage = Self.makePlatformImage(from: inputImage)
+            self.maskedPreviewImage = Self.makeNSImage(from: inputImage)
         }
     }
 
@@ -112,15 +112,15 @@ final class MaskEditorSession {
             )
             let preview = try DepthLayerMasking.apply(mask: mask, to: inputImage)
             currentMask = mask
-            currentMaskImage = Self.makePlatformImage(from: mask)
-            maskedPreviewImage = Self.makePlatformImage(from: preview)
+            currentMaskImage = Self.makeNSImage(from: mask)
+            maskedPreviewImage = Self.makeNSImage(from: preview)
             errorMessage = nil
         } catch {
             errorMessage = "マスクの更新に失敗しました"
         }
     }
 
-    private static func makePlatformImage(from cgImage: CGImage) -> NSImage {
+    private static func makeNSImage(from cgImage: CGImage) -> NSImage {
         NSImage(
             cgImage: cgImage,
             size: NSSize(width: cgImage.width, height: cgImage.height)

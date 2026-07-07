@@ -66,7 +66,7 @@ struct DepthPreviewCanvas: View {
             ) {
                 ZStack {
                     ForEach(layers) { layer in
-                        Image(platformImage: layer.image)
+                        Image(nsImage: layer.image)
                             .resizable()
                             .scaledToFit()
                             .frame(width: imageSize.width, height: imageSize.height)

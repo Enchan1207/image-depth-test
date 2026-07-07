@@ -84,7 +84,7 @@ struct MaskEditorView: View {
                 synchronizedViewport: $synchronizedViewport
             ) {
                 ZStack {
-                    Image(platformImage: session.baseMaskImage)
+                    Image(nsImage: session.baseMaskImage)
                         .resizable()
                         .interpolation(.none)
                         .frame(width: session.imageSize.width, height: session.imageSize.height)
@@ -116,13 +116,13 @@ struct MaskEditorView: View {
                 synchronizedViewport: $synchronizedViewport
             ) {
                 ZStack {
-                    Image(platformImage: session.originalImage)
+                    Image(nsImage: session.originalImage)
                         .resizable()
                         .scaledToFit()
                         .opacity(0.34)
                         .frame(width: session.imageSize.width, height: session.imageSize.height)
 
-                    Image(platformImage: session.maskedPreviewImage)
+                    Image(nsImage: session.maskedPreviewImage)
                         .resizable()
                         .scaledToFit()
                         .opacity(0.88)

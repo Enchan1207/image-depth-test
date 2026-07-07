@@ -36,11 +36,52 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            fileImportPane
+            FileImportPane(
+                viewModel: viewModel,
+                importImageAction: presentImageImporter,
+                reestimateAction: reestimateDepthForSelectedImage
+            )
 
             HStack(alignment: .top, spacing: 14) {
-                previewWorkspace
-                layerControlPane
+                PreviewWorkspacePane(
+                    layers: visiblePreviewLayers,
+                    workspaceID: previewWorkspaceID,
+                    placeholderSystemImage: visiblePreviewPlaceholderSystemImage,
+                    placeholderMessage: visiblePreviewPlaceholderMessage,
+                    isLoading: isProcessingImage,
+                    selectedLayer: layerDefinitions[safe: selectedLayerIndex],
+                    layerDefinitions: layerDefinitions,
+                    boundaries: $boundaries,
+                    selectedLayerID: $selectedLayerID,
+                    rangeEditingChanged: handleDepthRangeEditingChanged
+                )
+
+                LayerControlPane(
+                    layers: layerDefinitions,
+                    layerCount: layerItems.count,
+                    selectedLayerID: $selectedLayerID,
+                    visiblePreviewTargets: $visiblePreviewTargets,
+                    editedMaskLayerIDs: Set(editedMasksByLayerID.keys),
+                    availableLayerIndexes: availableLayerIndexes,
+                    canGenerateLayerRenderings: viewModel.canGenerateLayerRenderings,
+                    isDepthMapAvailable: viewModel.depthImage != nil,
+                    isOriginalAvailable: viewModel.inputImage != nil,
+                    canEditMask: canEditMask(for:),
+                    splitSelectedLayer: splitSelectedLayer,
+                    autoSplitDepthRanges: {
+                        Task {
+                            await autoSplitDepthRanges()
+                        }
+                    },
+                    resetDepthRanges: resetDepthRanges,
+                    editMask: { layer in
+                        Task {
+                            await openMaskEditor(for: layer)
+                        }
+                    },
+                    deleteLayer: deleteLayer(id:),
+                    togglePreviewTarget: togglePreviewTarget
+                )
             }
         }
         .padding(20)
@@ -86,243 +127,8 @@ struct ContentView: View {
         }
     }
 
-    private var fileImportPane: some View {
-        HStack(spacing: 12) {
-            Button {
-                if confirmDiscardEditedMasks(
-                    messageText: "画像を変更すると編集済みマスクは破棄されます。",
-                    informativeText: "続行すると開いているマスクエディタも閉じます。"
-                ) {
-                    discardEditedMasksAndCloseEditors()
-                    isFileImporterPresented = true
-                }
-            } label: {
-                Label("画像を読み込む", systemImage: "photo.badge.plus")
-            }
-            .buttonStyle(.borderedProminent)
-
-            statusView
-
-            Spacer()
-
-            Button {
-                Task {
-                    await viewModel.estimateDepthForSelectedImage()
-                    discardEditedMasksAndCloseEditors()
-                    await generateLayerRenderings()
-                }
-            } label: {
-                Label("再推定", systemImage: "arrow.triangle.2.circlepath")
-            }
-            .disabled(!viewModel.hasSelectedImage || viewModel.isEstimatingDepth || viewModel.isLoadingImage)
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    @ViewBuilder
-    private var statusView: some View {
-        if viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings {
-            ProgressView()
-                .controlSize(.small)
-            Text(statusText)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        } else if let errorMessage = viewModel.errorMessage {
-            Label(errorMessage, systemImage: "exclamationmark.triangle")
-                .font(.subheadline)
-                .foregroundStyle(.red)
-        } else if let selectedFileName = viewModel.selectedFileName {
-            Text(selectedFileName)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        } else {
-            Text("深度推定する画像を選択してください")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusText: String {
-        if viewModel.isLoadingImage { return "読み込み中" }
-        if viewModel.isEstimatingDepth { return "深度推定中" }
-        if viewModel.isGeneratingLayerRenderings { return "レイヤ生成中" }
-        return "処理中"
-    }
-
-    private var previewWorkspace: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("プレビュー")
-                .font(.headline)
-
-            DepthPreviewCanvas(
-                layers: visiblePreviewLayers,
-                workspaceID: previewWorkspaceID,
-                placeholderSystemImage: visiblePreviewPlaceholderSystemImage,
-                placeholderMessage: visiblePreviewPlaceholderMessage,
-                isLoading: viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings,
-                selectedLayer: layerDefinitions[safe: selectedLayerIndex]
-            )
-
-            DepthRangeEditor(
-                layers: layerDefinitions,
-                boundaries: $boundaries,
-                selectedLayerID: $selectedLayerID
-            ) { isEditing in
-                handleDepthRangeEditingChanged(isEditing)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var layerControlPane: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("レイヤ設定")
-                .font(.headline)
-
-            Button {
-                splitSelectedLayer()
-            } label: {
-                Label("分割して追加", systemImage: "plus.rectangle.on.rectangle")
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("深度レンジ")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Button("Auto") {
-                        Task {
-                            await autoSplitDepthRanges()
-                        }
-                    }
-                    .disabled(!viewModel.canGenerateLayerRenderings)
-
-                    Button("Reset") {
-                        resetDepthRanges()
-                    }
-                }
-
-                ForEach(layerDefinitions) { layer in
-                    LayerRangeRow(
-                        layer: layer,
-                        isSelected: layer.id == selectedLayerID,
-                        canDelete: layerItems.count > 2,
-                        canEditMask: canEditMask(for: layer),
-                        isMaskEdited: editedMasksByLayerID[layer.id] != nil
-                    ) {
-                        selectedLayerID = layer.id
-                    } editMaskAction: {
-                        Task {
-                            await openMaskEditor(for: layer)
-                        }
-                    } deleteAction: {
-                        deleteLayer(id: layer.id)
-                    }
-                }
-            }
-
-            Spacer(minLength: 12)
-
-            displayControlPane
-        }
-        .padding(16)
-        .frame(width: 300)
-        .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private var displayControlPane: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("表示")
-                .font(.subheadline.weight(.semibold))
-
-            ForEach(layerDefinitions.reversed()) { layer in
-                let target = PreviewDisplayTarget.layer(layer.id)
-                previewTargetButton(
-                    title: layer.name,
-                    systemImageName: "scope",
-                    tint: layer.color,
-                    isVisible: visiblePreviewTargets.contains(target),
-                    isAvailable: viewModel.layerCutoutImages.indices.contains(layer.index)
-                ) {
-                    togglePreviewTarget(target)
-                }
-            }
-
-            previewTargetButton(
-                title: "深度マップ",
-                systemImageName: "square.stack.3d.down.right",
-                isVisible: visiblePreviewTargets.contains(.depthMap),
-                isAvailable: viewModel.depthImage != nil
-            ) {
-                togglePreviewTarget(.depthMap)
-            }
-
-            previewTargetButton(
-                title: "元画像",
-                systemImageName: "photo",
-                isVisible: visiblePreviewTargets.contains(.original),
-                isAvailable: viewModel.inputImage != nil
-            ) {
-                togglePreviewTarget(.original)
-            }
-        }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func previewTargetButton(
-        title: String,
-        systemImageName: String,
-        tint: Color? = nil,
-        isVisible: Bool,
-        isAvailable: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: systemImageName)
-                    .frame(width: 18)
-                    .foregroundStyle(tint ?? .secondary)
-
-                Text(title)
-                    .font(.subheadline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-
-                Spacer()
-
-                if isVisible {
-                    Image(systemName: "eye.fill")
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(.tint)
-                } else {
-                    Image(systemName: "eye.slash")
-                        .frame(width: 22, height: 22)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .opacity(isAvailable ? 1 : 0.45)
-            .background(isVisible ? Color.accentColor.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isVisible ? Color.accentColor.opacity(0.30) : Color.secondary.opacity(0.14), lineWidth: 1)
-            }
-        }
-        .buttonStyle(.plain)
-        .disabled(!isAvailable)
-        .help(isVisible ? "非表示にする" : "表示する")
+    private var isProcessingImage: Bool {
+        viewModel.isLoadingImage || viewModel.isEstimatingDepth || viewModel.isGeneratingLayerRenderings
     }
 
     private var layerDefinitions: [DepthLayerDefinition] {
@@ -348,6 +154,10 @@ struct ContentView: View {
 
     private var selectedLayerIndex: Int {
         layerItems.firstIndex { $0.id == selectedLayerID } ?? 0
+    }
+
+    private var availableLayerIndexes: Set<Int> {
+        Set(viewModel.layerCutoutImages.indices)
     }
 
     private var visiblePreviewLayers: [DepthPreviewCanvasLayer] {
@@ -396,6 +206,24 @@ struct ContentView: View {
         }
 
         return "empty-preview-workspace"
+    }
+
+    private func presentImageImporter() {
+        if confirmDiscardEditedMasks(
+            messageText: "画像を変更すると編集済みマスクは破棄されます。",
+            informativeText: "続行すると開いているマスクエディタも閉じます。"
+        ) {
+            discardEditedMasksAndCloseEditors()
+            isFileImporterPresented = true
+        }
+    }
+
+    private func reestimateDepthForSelectedImage() {
+        Task {
+            await viewModel.estimateDepthForSelectedImage()
+            discardEditedMasksAndCloseEditors()
+            await generateLayerRenderings()
+        }
     }
 
     private func autoSplitDepthRanges() async {
@@ -577,13 +405,6 @@ struct ContentView: View {
         maskEditorRegistry.closeAllDiscardingChanges()
     }
 
-    private func ensureBoundaryStorage(for layerCount: Int) {
-        while boundaries.count < max(0, layerCount - 1) {
-            let fallbackValue = Double(boundaries.count + 1) / Double(layerCount)
-            boundaries.append(fallbackValue)
-        }
-    }
-
     private func defaultBoundaries(for layerCount: Int) -> [Double] {
         guard layerCount > 1 else { return [] }
         return (1..<layerCount).map { Double($0) / Double(layerCount) }
@@ -604,11 +425,6 @@ struct ContentView: View {
 
     private func nextLayerColor(for index: Int) -> NSColor {
         DepthLayerItem.presetColor(at: index)
-    }
-
-    private func syncSelection() {
-        guard !layerItems.contains(where: { $0.id == selectedLayerID }) else { return }
-        selectedLayerID = layerItems.last?.id ?? selectedLayerID
     }
 
     private func togglePreviewTarget(_ target: PreviewDisplayTarget) {
@@ -636,12 +452,6 @@ struct ContentView: View {
 
         return sanitizedBoundaries
     }
-}
-
-private enum PreviewDisplayTarget: Hashable {
-    case original
-    case depthMap
-    case layer(UUID)
 }
 
 private struct PreviewDepthEstimator: DepthEstimating {
