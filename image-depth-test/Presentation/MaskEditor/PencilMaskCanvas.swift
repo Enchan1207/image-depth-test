@@ -52,10 +52,16 @@ struct PencilMaskCanvas: NSViewRepresentable {
 final class MaskDrawingNSView: NSView {
     var strokes: [MaskStroke] = []
     var tool: MaskEditorTool = .pencil
-    var brushSize: Double = 28
+    var brushSize: Double = 28 {
+        didSet {
+            needsDisplay = true
+        }
+    }
     var onDrawingChanged: (([MaskStroke]) -> Void)?
 
     private var activeStroke: MaskStroke?
+    private var cursorPoint: CGPoint?
+    private var trackingArea: NSTrackingArea?
 
     override var isFlipped: Bool {
         true
@@ -65,8 +71,26 @@ final class MaskDrawingNSView: NSView {
         true
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseEnteredAndExited, .mouseMoved, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        self.trackingArea = trackingArea
+    }
+
     override func mouseDown(with event: NSEvent) {
         let point = clampedPoint(for: event)
+        cursorPoint = point
         activeStroke = MaskStroke(tool: tool, brushSize: brushSize, points: [point])
         needsDisplay = true
     }
@@ -75,6 +99,7 @@ final class MaskDrawingNSView: NSView {
         guard activeStroke != nil else { return }
 
         let point = clampedPoint(for: event)
+        cursorPoint = point
         activeStroke?.points.append(point)
         needsDisplay = true
     }
@@ -83,10 +108,26 @@ final class MaskDrawingNSView: NSView {
         guard var stroke = activeStroke else { return }
 
         let point = clampedPoint(for: event)
+        cursorPoint = point
         stroke.points.append(point)
         strokes.append(stroke)
         activeStroke = nil
         onDrawingChanged?(strokes)
+        needsDisplay = true
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        cursorPoint = clampedPoint(for: event)
+        needsDisplay = true
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        cursorPoint = clampedPoint(for: event)
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        cursorPoint = nil
         needsDisplay = true
     }
 
@@ -102,6 +143,10 @@ final class MaskDrawingNSView: NSView {
 
         if let activeStroke {
             draw(activeStroke)
+        }
+
+        if let cursorPoint {
+            drawBrushCursor(at: cursorPoint)
         }
     }
 
@@ -131,6 +176,20 @@ final class MaskDrawingNSView: NSView {
             path.line(to: point)
         }
         (stroke.tool == .pencil ? NSColor.white : NSColor.black).setStroke()
+        path.stroke()
+    }
+
+    private func drawBrushCursor(at point: CGPoint) {
+        let radius = brushSize / 2
+        let path = NSBezierPath(ovalIn: NSRect(
+            x: point.x - radius,
+            y: point.y - radius,
+            width: brushSize,
+            height: brushSize
+        ))
+        path.lineWidth = 2
+        path.setLineDash([6, 4], count: 2, phase: 0)
+        NSColor.systemRed.setStroke()
         path.stroke()
     }
 

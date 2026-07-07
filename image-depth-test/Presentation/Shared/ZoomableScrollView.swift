@@ -119,7 +119,7 @@ struct ZoomableScrollView<Content: View>: NSViewRepresentable {
             }
 
             let currentViewport = ZoomableScrollViewViewport(
-                contentOffset: scrollView.contentView.bounds.origin,
+                contentOffset: scrollView.documentVisibleRect.origin,
                 magnification: scrollView.magnification
             )
             guard !currentViewport.isNearlyEqual(to: viewport) else { return }
@@ -147,7 +147,7 @@ struct ZoomableScrollView<Content: View>: NSViewRepresentable {
             }
 
             let viewport = ZoomableScrollViewViewport(
-                contentOffset: scrollView.contentView.bounds.origin,
+                contentOffset: scrollView.documentVisibleRect.origin,
                 magnification: scrollView.magnification
             )
             guard !synchronizedViewport.wrappedValue.isNearlyEqual(to: viewport) else { return }
@@ -155,7 +155,7 @@ struct ZoomableScrollView<Content: View>: NSViewRepresentable {
         }
 
         private func constrained(_ offset: CGPoint, for scrollView: NSScrollView, contentSize: CGSize) -> CGPoint {
-            let visibleSize = scrollView.contentView.bounds.size
+            let visibleSize = scrollView.documentVisibleRect.size
             return CGPoint(
                 x: min(max(offset.x, 0), max(0, contentSize.width - visibleSize.width)),
                 y: min(max(offset.y, 0), max(0, contentSize.height - visibleSize.height))
